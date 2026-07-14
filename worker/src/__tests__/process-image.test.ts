@@ -4,7 +4,15 @@ import type { Job } from 'bullmq';
 // Mock all external dependencies before importing the module under test
 vi.mock('../db', () => ({
   default: {
-    image: { update: vi.fn().mockResolvedValue({}) },
+    image: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'img-1',
+        mimeType: 'image/jpeg',
+        fileSize: 1024,
+        storedPath: '/tmp/test.jpg',
+      }),
+      update: vi.fn().mockResolvedValue({}),
+    },
     job: { findUnique: vi.fn().mockResolvedValue({ userId: 'user-1' }) },
     notification: { create: vi.fn().mockResolvedValue({}) },
   },
@@ -117,6 +125,48 @@ describe('processImage', () => {
           status: 'PENDING',
           retryCount: { increment: 1 },
           failureReason: 'INTERNAL_ERROR',
+        }),
+      }),
+    );
+  });
+
+  it('fails an oversized queued image without calling AI providers', async () => {
+    vi.mocked(prisma.image.findUnique).mockResolvedValueOnce({
+      id: 'img-1',
+      mimeType: 'image/jpeg',
+      fileSize: 5 * 1024 * 1024 + 1,
+      storedPath: '/tmp/test.jpg',
+    } as any);
+
+    await expect(processImage(createMockJob())).rejects.toThrow('exceeds the 5MB size limit');
+
+    expect(generateCaption).not.toHaveBeenCalled();
+    expect(prisma.image.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          failureReason: 'FILE_TOO_LARGE',
+        }),
+      }),
+    );
+  });
+
+  it('fails an unsupported queued image format without calling AI providers', async () => {
+    vi.mocked(prisma.image.findUnique).mockResolvedValueOnce({
+      id: 'img-1',
+      mimeType: 'image/gif',
+      fileSize: 1024,
+      storedPath: '/tmp/test.gif',
+    } as any);
+
+    await expect(processImage(createMockJob())).rejects.toThrow('not supported');
+
+    expect(generateCaption).not.toHaveBeenCalled();
+    expect(prisma.image.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          failureReason: 'UNSUPPORTED_FORMAT',
         }),
       }),
     );

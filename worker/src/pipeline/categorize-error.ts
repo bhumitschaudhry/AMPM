@@ -9,6 +9,13 @@ export function categorizeError(error: unknown): CategorizedError {
     return { code: 'INTERNAL_ERROR', message: 'Unexpected error during image processing.' };
   }
 
+  if (typeof error.failureReason === 'string') {
+    return {
+      code: error.failureReason,
+      message: error.message || 'Image failed validation before processing.',
+    };
+  }
+
   if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
     return {
       code: 'AI_PROVIDER_TIMEOUT',
@@ -47,6 +54,6 @@ export function categorizeError(error: unknown): CategorizedError {
 }
 
 /** Type guard for objects shaped like an Error with optional axios/node properties. */
-function isErrorLike(error: unknown): error is { code?: string; message?: string } {
+function isErrorLike(error: unknown): error is { code?: string; failureReason?: string; message?: string } {
   return typeof error === 'object' && error !== null;
 }

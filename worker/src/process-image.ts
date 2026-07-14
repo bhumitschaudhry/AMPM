@@ -13,14 +13,30 @@ interface ImageJobData {
   storedPath: string;
 }
 
+const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const NON_RETRYABLE_FAILURE_REASONS = new Set(['INVALID_FILE', 'UNSUPPORTED_FORMAT', 'FILE_TOO_LARGE']);
+
+class ImageValidationError extends Error {
+  constructor(
+    public readonly failureReason: 'INVALID_FILE' | 'UNSUPPORTED_FORMAT' | 'FILE_TOO_LARGE',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /** BullMQ job handler — runs the full AI pipeline on a single image. */
 export async function processImage(job: Job<ImageJobData>): Promise<void> {
-  const { imageId, storedPath } = job.data;
+  const { imageId } = job.data;
 
   try {
     await markImageStatus(imageId, 'PROCESSING');
 
-    const imageBuffer = await readAndValidateImage(storedPath);
+    const image = await loadImageForProcessing(imageId);
+    validateImageRecord(image);
+
+    const imageBuffer = await readAndValidateImage(image.storedPath);
     const caption = await generateCaption(imageBuffer);
     const labels = await detectLabels(imageBuffer);
     const safetyResult = await checkContentSafety(imageBuffer);
@@ -32,7 +48,9 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
     }
   } catch (error) {
     const { code, message } = categorizeError(error);
-    if (hasRetryAttemptsRemaining(job)) {
+    if (NON_RETRYABLE_FAILURE_REASONS.has(code)) {
+      await markImageFailedWithReason(imageId, code, message);
+    } else if (hasRetryAttemptsRemaining(job)) {
       await markImagePendingForRetry(imageId, code, message);
     } else {
       await markImageFailed(imageId, code, message);
@@ -48,6 +66,41 @@ function hasRetryAttemptsRemaining(job: Job<ImageJobData>): boolean {
     : parseInt(process.env.MAX_RETRIES || '3', 10);
 
   return job.attemptsMade + 1 < configuredAttempts;
+}
+
+/** Fetch current image metadata from the database before processing. */
+async function loadImageForProcessing(imageId: string) {
+  const image = await prisma.image.findUnique({
+    where: { id: imageId },
+    select: {
+      mimeType: true,
+      fileSize: true,
+      storedPath: true,
+    },
+  });
+
+  if (!image) {
+    throw new ImageValidationError('INVALID_FILE', 'Image record could not be found for processing.');
+  }
+
+  return image;
+}
+
+/** Re-check upload constraints in the worker for defense in depth. */
+function validateImageRecord(image: { mimeType: string; fileSize: number }) {
+  if (!ALLOWED_MIME_TYPES.has(image.mimeType)) {
+    throw new ImageValidationError(
+      'UNSUPPORTED_FORMAT',
+      `Image format "${image.mimeType}" is not supported. Only JPG, PNG, and WEBP images can be processed.`,
+    );
+  }
+
+  if (image.fileSize > MAX_FILE_SIZE_BYTES) {
+    throw new ImageValidationError(
+      'FILE_TOO_LARGE',
+      `Image exceeds the 5MB size limit and cannot be processed.`,
+    );
+  }
 }
 
 /** Read file from disk and normalize through sharp to validate it's a real image. */
@@ -112,6 +165,19 @@ async function markImagePendingForRetry(imageId: string, failureReason: string, 
     where: { id: imageId },
     data: {
       status: 'PENDING',
+      retryCount: { increment: 1 },
+      failureReason,
+      failureMessage,
+    },
+  });
+}
+
+/** Record a terminal non-retryable failure with its root failure reason. */
+async function markImageFailedWithReason(imageId: string, failureReason: string, failureMessage: string) {
+  await prisma.image.update({
+    where: { id: imageId },
+    data: {
+      status: 'FAILED',
       retryCount: { increment: 1 },
       failureReason,
       failureMessage,
