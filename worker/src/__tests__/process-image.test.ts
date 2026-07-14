@@ -50,13 +50,14 @@ import { checkContentSafety } from '../pipeline/check-content-safety';
 function createMockJob(overrides: { attemptsMade?: number; data?: Partial<Job['data']> } = {}): Job<any> {
   return {
     attemptsMade: overrides.attemptsMade ?? 2,
+    discard: vi.fn().mockResolvedValue(undefined),
     data: {
       imageId: 'img-1',
       jobId: 'job-1',
       storedPath: '/tmp/test.jpg',
       ...overrides.data,
     },
-  } as Job<any>;
+  } as unknown as Job<any>;
 }
 
 describe('processImage', () => {
@@ -149,6 +150,31 @@ describe('processImage', () => {
         }),
       }),
     );
+  });
+
+  it('discards the job for non-retryable failures so BullMQ does not re-run them', async () => {
+    vi.mocked(prisma.image.findUnique).mockResolvedValueOnce({
+      id: 'img-1',
+      mimeType: 'image/gif',
+      fileSize: 1024,
+      storedPath: '/tmp/test.gif',
+    } as any);
+
+    const job = createMockJob();
+    await expect(processImage(job)).rejects.toThrow('not supported');
+
+    expect(job.discard).toHaveBeenCalledTimes(1);
+    expect(generateCaption).not.toHaveBeenCalled();
+  });
+
+  it('does NOT discard the job for retryable failures still within attempt budget', async () => {
+    const retryableError = new Error('model unavailable');
+    vi.mocked(generateCaption).mockRejectedValueOnce(retryableError);
+
+    const job = createMockJob({ attemptsMade: 0 });
+    await expect(processImage(job)).rejects.toThrow('model unavailable');
+
+    expect(job.discard).not.toHaveBeenCalled();
   });
 
   it('fails an unsupported queued image format without calling AI providers', async () => {

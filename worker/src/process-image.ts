@@ -14,7 +14,10 @@ interface ImageJobData {
 }
 
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+// ponytail: MAX_FILE_SIZE_MB is the real source of truth (docker-compose sets it); the
+// previously-hardcoded 5MB constant ignored the env var. Server derives the same way.
+const MAX_FILE_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB || '5', 10);
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const NON_RETRYABLE_FAILURE_REASONS = new Set(['INVALID_FILE', 'UNSUPPORTED_FORMAT', 'FILE_TOO_LARGE']);
 
 class ImageValidationError extends Error {
@@ -28,7 +31,11 @@ class ImageValidationError extends Error {
 
 /** BullMQ job handler — runs the full AI pipeline on a single image. */
 export async function processImage(job: Job<ImageJobData>): Promise<void> {
-  const { imageId } = job.data;
+  // Guard the queue contract: a missing/renamed field must fail loudly, not become undefined.
+  const { imageId, jobId, storedPath } = job.data;
+  if (!imageId || !jobId || !storedPath) {
+    throw new Error('Malformed image-processing job payload: imageId, jobId, and storedPath are required.');
+  }
 
   try {
     await markImageStatus(imageId, 'PROCESSING');
@@ -49,7 +56,10 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
   } catch (error) {
     const { code, message } = categorizeError(error);
     if (NON_RETRYABLE_FAILURE_REASONS.has(code)) {
+      // ponytail: non-retryable (e.g. FILE_TOO_LARGE) can never succeed — discard the
+      // job so BullMQ won't burn AI quota re-running it. DB status is the source of truth.
       await markImageFailedWithReason(imageId, code, message);
+      await job.discard();
     } else if (hasRetryAttemptsRemaining(job)) {
       await markImagePendingForRetry(imageId, code, message);
     } else {

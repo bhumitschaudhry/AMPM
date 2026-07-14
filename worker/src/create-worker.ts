@@ -1,6 +1,8 @@
 import { Worker } from 'bullmq';
 import { processImage } from './process-image';
 
+// NOTE: must match IMAGE_QUEUE_NAME in server/src/queue.ts — there is no shared
+// package yet (see docs/adr/0001-architecture-decisions.md). Keep both in sync.
 const QUEUE_NAME = 'image-processing';
 const CONCURRENCY = 3;
 
