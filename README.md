@@ -1,12 +1,11 @@
-# AMPM — AI-Powered Media Processing Microservice
+# AMPM: AI-Powered Media Processing Microservice
 
-AMPM is a robust, production-ready, asynchronous media processing microservice built with the **PERN** (Postgres, Express, React, Node) stack, utilizing a distributed worker architecture powered by **BullMQ & Redis** and integrating state-of-the-art AI endpoints.
+AMPM is an asynchronous media processing service built with the PERN (PostgreSQL, Express, React, Node) stack. It utilizes a distributed worker architecture powered by BullMQ and Redis to process uploaded images asynchronously through an AI pipeline, integrating Hugging Face and Google Cloud Vision API endpoints.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-```
                     +-----------------------------+
                     |        React Client         |
                     | (SPA dark theme/responsive) |
@@ -36,22 +35,21 @@ AMPM is a robust, production-ready, asynchronous media processing microservice b
                       | BLIP   |        | Cloud  |
                       | Model  |        | Vision |
                       +--------+        +--------+
-```
 
 ### Flow Breakdown
-1. **Upload & Enqueue**: Users upload 1-N images under a single **Job** transaction. The API server stores files in volumed local storage, writes records to PostgreSQL (`PENDING` state), enqueues image processing tasks to Redis, and returns the Job & Image IDs instantly.
-2. **Asynchronous Execution**: A dedicated BullMQ Worker processes images concurrently (limit of 3).
+1. **Upload & Enqueue**: Users upload one or more images under a single Job transaction. The API server stores files in volumed local storage, writes records to PostgreSQL (in a `pending` state), enqueues image processing tasks to Redis, and returns the Job and Image IDs instantly.
+2. **Asynchronous Execution**: A dedicated BullMQ Worker processes images concurrently, with a default limit of three concurrent jobs.
 3. **AI Pipeline**:
-   - **Step 1**: Converts the image into binary and calls HuggingFace's Salesforce BLIP Captioning model.
+   - **Step 1**: Converts the image to binary and calls Hugging Face's Salesforce BLIP Captioning model.
    - **Step 2**: Encodes the image to base64 and invokes Google Vision Label Detection.
    - **Step 3**: Invokes Google Vision SafeSearch Content Safety Check.
-4. **Safety Flagging**: If any SafeSearch category returns `LIKELY` or `VERY_LIKELY`, the image is marked `isFlagged: true` and an in-app notification is sent to the user.
-5. **UI Updates**: The client dashboard and detail views dynamically poll (every 3-5s) to reflect status changes (`pending` -> `processing` -> `completed` / `failed`).
+4. **Safety Flagging**: If any SafeSearch category returns `LIKELY` or `VERY_LIKELY`, the image is marked as flagged (`isFlagged: true`) and an in-app notification is sent to the user.
+5. **UI Updates**: The client dashboard and detail views dynamically poll (every 3-5 seconds) to reflect status changes (`pending` -> `processing` -> `completed` / `failed`).
 6. **Retry Mechanism**: Failed image processing tasks can be retried individually directly from the detail view.
 
 ---
 
-## 🛠️ Tech Stack & Key Decisions
+## Tech Stack and Key Decisions
 
 - **Database**: PostgreSQL (relational structure captures Job -> Images and User -> Notifications mappings).
 - **ORM**: Prisma (provides type-safe schema, migrations, and relationships).
@@ -63,21 +61,21 @@ AMPM is a robust, production-ready, asynchronous media processing microservice b
 
 ---
 
-## 🚀 How to Run Locally
+## How to Run Locally
 
-### 1. Prerequisites
-- Docker & Docker Compose installed.
+### Prerequisites
+- Docker and Docker Compose installed.
 - **or** Node.js v20+, Redis, and PostgreSQL running locally.
 
-### 2. Environment Setup
+### Environment Setup
 Copy `.env.example` to `.env` in the root:
 ```bash
 cp .env.example .env
 ```
 
 #### Obtaining API Keys:
-1. **HuggingFace API Token**:
-   - Register at [HuggingFace](https://huggingface.co/).
+1. **Hugging Face API Token**:
+   - Register at [Hugging Face](https://huggingface.co/).
    - Go to **Settings -> Access Tokens** and create a read token.
    - Set as `HUGGINGFACE_API_TOKEN`.
 2. **Google Cloud Vision API Key**:
@@ -86,37 +84,37 @@ cp .env.example .env
    - Create an API key in **APIs & Services -> Credentials**.
    - Set as `GOOGLE_CLOUD_VISION_API_KEY`.
 
-### 3. Running with Docker Compose (Recommended)
+### Running with Docker Compose (Recommended)
 From the root directory:
 ```bash
 docker-compose up --build
 ```
 This spins up the database, Redis queue, API gateway, background worker, and React client.
 - Frontend App: [http://localhost:5173](http://localhost:5173)
-- API Gateway & Swagger Specs: [http://localhost:3001/api-docs](http://localhost:3001/api-docs)
+- API Gateway and Swagger Specs: [http://localhost:3001/api-docs](http://localhost:3001/api-docs)
 
 ---
 
-## 📝 API Endpoints
+## API Endpoints
 
 Fully detailed in `/api-docs` Swagger UI:
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| `POST` | `/api/auth/signup` | No | Creates a user account & returns JWTs |
-| `POST` | `/api/auth/login` | No | Logins and returns tokens |
+| `POST` | `/api/auth/signup` | No | Creates a user account and returns JWTs |
+| `POST` | `/api/auth/login` | No | Logs in and returns tokens |
 | `POST` | `/api/auth/refresh` | No | Rotates refresh token for a new access token |
 | `GET`  | `/api/auth/me` | Yes | Retrieves current user |
 | `POST` | `/api/jobs` | Yes | Uploads one or more images (multipart) |
 | `GET`  | `/api/jobs` | Yes | Lists user's jobs with derived overall status |
-| `GET`  | `/api/jobs/:jobId` | Yes | Retrieves job detail with all child images & AI data |
+| `GET`  | `/api/jobs/:jobId` | Yes | Retrieves job detail with all child images and AI data |
 | `POST` | `/api/jobs/:jobId/images/:imageId/retry` | Yes | Retries processing a failed image |
 | `GET`  | `/api/notifications` | Yes | Lists user alerts (including flagged image warnings) |
 | `PATCH`| `/api/notifications/:id/read` | Yes | Marks an alert as read |
 
 ---
 
-## 💡 Assumptions & Open-Ended Decisions
+## Assumptions and Open-Ended Decisions
 
 1. **Batch Job Model**: Grounded in the PDF, but extended with the MD's 1-to-N batch logic. Since a batch job has multiple images, a job's overall status is derived dynamically:
    - `pending`: all images pending
@@ -129,7 +127,7 @@ Fully detailed in `/api-docs` Swagger UI:
 
 ---
 
-## 📈 Production Scaling Suggestions
+## Production Scaling Suggestions
 
 If traffic increases by 10x:
 - **Worker Scaling**: Spin up multiple instances of the worker service. BullMQ handles horizontal scaling seamlessly; tasks are distributed automatically among available worker pods.

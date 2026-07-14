@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 import { Job, Notification } from '../types';
+import { BoltIcon, BellIcon, UploadIcon, FolderIcon, AlertTriangleIcon, XIcon } from '../components/Icons';
 
 export default function Dashboard() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -137,7 +138,9 @@ export default function Dashboard() {
     <div className="dashboard-layout">
       <header className="dashboard-header">
         <div className="header-brand">
-          <span className="brand-icon">⚡</span>
+          <span className="brand-icon" style={{ display: 'inline-flex', alignItems: 'center' }}>
+            <BoltIcon />
+          </span>
           <h1>AMPM</h1>
         </div>
         <div className="header-actions">
@@ -146,8 +149,9 @@ export default function Dashboard() {
               className={`notification-bell ${unreadCount > 0 ? 'has-unread' : ''}`}
               onClick={() => setShowNotifications(!showNotifications)}
               aria-label="Notifications"
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
             >
-              🔔
+              <BellIcon />
               {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
             </button>
             {showNotifications && (
@@ -203,7 +207,9 @@ export default function Dashboard() {
                 style={{ display: 'none' }}
               />
               <label htmlFor="file-upload" className="dropzone-label">
-                <span className="dropzone-icon">📤</span>
+                <span className="dropzone-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <UploadIcon />
+                </span>
                 <span className="dropzone-text">
                   Drag and drop files here, or <strong>browse</strong>
                 </span>
@@ -225,8 +231,10 @@ export default function Dashboard() {
                         type="button"
                         className="btn-remove"
                         onClick={() => setSelectedFiles((prev) => prev.filter((_, i) => i !== idx))}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                        aria-label="Remove file"
                       >
-                        ✕
+                        <XIcon />
                       </button>
                     </div>
                   ))}
@@ -249,7 +257,9 @@ export default function Dashboard() {
           <h2>Processing Jobs</h2>
           {jobs.length === 0 ? (
             <div className="empty-state">
-              <span className="empty-state-icon">📂</span>
+              <span className="empty-state-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                <FolderIcon />
+              </span>
               <p>No media processing jobs yet. Upload files to get started!</p>
             </div>
           ) : (
@@ -262,8 +272,13 @@ export default function Dashboard() {
                 >
                   <div className="job-card-header">
                     <span className="job-id">Job #{job.id.substring(0, 8)}</span>
-                    <div>
-                      {job.images.some((image) => image.isFlagged) && <span>⚠️ Flagged </span>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {job.images.some((image) => image.isFlagged) && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--warning-color)', fontWeight: 600, fontSize: '0.85rem' }}>
+                          <AlertTriangleIcon size="1.1em" />
+                          <span>Flagged</span>
+                        </span>
+                      )}
                       <span className={`status-badge status-${job.status.toLowerCase()}`}>
                         {job.status.replace('_', ' ')}
                       </span>

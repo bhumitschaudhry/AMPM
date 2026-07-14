@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api';
 import { Job, Image } from '../types';
 import ImagePreview from '../components/ImagePreview';
+import { ArrowLeftIcon, AlertTriangleIcon } from '../components/Icons';
 
 export default function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -83,8 +84,9 @@ export default function JobDetailPage() {
   return (
     <div className="detail-container">
       <header className="detail-header">
-        <button className="btn btn-secondary btn-sm" onClick={() => navigate('/')}>
-          ← Back to Dashboard
+        <button className="btn btn-secondary btn-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }} onClick={() => navigate('/')}>
+          <ArrowLeftIcon />
+          <span>Back to Dashboard</span>
         </button>
         <div className="job-info-title">
           <h2>Job Details</h2>
@@ -105,8 +107,9 @@ export default function JobDetailPage() {
               <div className="image-preview-container">
                 <ImagePreview jobId={job.id} imageId={img.id} alt={img.originalName} />
                 {img.isFlagged && (
-                  <div className="safety-flag-badge">
-                    ⚠️ FLAGGED: {img.flaggedCategory?.toUpperCase()}
+                  <div className="safety-flag-badge" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertTriangleIcon size="1.2em" />
+                    <span>FLAGGED: {img.flaggedCategory?.toUpperCase()}</span>
                   </div>
                 )}
               </div>
