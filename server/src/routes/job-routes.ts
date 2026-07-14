@@ -192,7 +192,7 @@ jobRouter.post("/:jobId/images/:imageId/retry", async (req: Request, res: Respon
 
     const updated = await prisma.image.update({
       where: { id: image.id },
-      data: { status: "PENDING", failureReason: null, failureMessage: null, retryCount: { increment: 1 } },
+      data: { status: "PENDING", failureReason: null, failureMessage: null },
     });
 
     await imageQueue.add("process-image", {

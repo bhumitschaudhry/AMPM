@@ -34,10 +34,33 @@ export const swaggerSpec = {
         properties: {
           id: { type: "string", format: "uuid" },
           originalName: { type: "string" },
+          mimeType: { type: "string" },
+          fileSize: { type: "integer" },
           status: { type: "string", enum: ["PENDING", "PROCESSING", "COMPLETED", "FAILED"] },
+          retryCount: { type: "integer" },
           caption: { type: "string", nullable: true },
-          labels: { type: "array", items: { type: "string" }, nullable: true },
-          safetyResult: { type: "object", nullable: true },
+          labels: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                score: { type: "number" },
+              },
+            },
+            nullable: true,
+          },
+          safetyResult: {
+            type: "object",
+            properties: {
+              isSafe: { type: "boolean" },
+              categories: { type: "object" },
+              flaggedCategory: { type: "string", nullable: true },
+            },
+            nullable: true,
+          },
+          isFlagged: { type: "boolean" },
+          flaggedCategory: { type: "string", nullable: true },
           failureReason: { type: "string", nullable: true },
           failureMessage: { type: "string", nullable: true },
         },
@@ -132,6 +155,17 @@ export const swaggerSpec = {
         },
       },
     },
+    "/auth/logout": {
+      post: {
+        tags: ["Auth"],
+        summary: "Log out and revoke all refresh tokens",
+        security: [{ BearerAuth: [] }],
+        responses: {
+          "200": { description: "Logged out", content: { "application/json": { schema: { type: "object", properties: { message: { type: "string" } } } } } },
+          "401": { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
     "/auth/me": {
       get: {
         tags: ["Auth"],
@@ -191,6 +225,21 @@ export const swaggerSpec = {
           "200": { description: "Image re-queued", content: { "application/json": { schema: { $ref: "#/components/schemas/Image" } } } },
           "400": { description: "Image not in FAILED state", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           "404": { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/jobs/{jobId}/images/{imageId}/file": {
+      get: {
+        tags: ["Jobs"],
+        summary: "Get image file for preview",
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "imageId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+        ],
+        responses: {
+          "200": { description: "Image binary", content: { "image/*": {} } },
+          "404": { description: "Image not found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
