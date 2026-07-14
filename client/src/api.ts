@@ -63,8 +63,9 @@ api.interceptors.response.use(
 
       try {
         const response = await axios.post('/api/auth/refresh', { refreshToken });
-        const { accessToken } = response.data;
+        const { accessToken, refreshToken: newRefreshToken } = response.data;
         localStorage.setItem('ampm_access_token', accessToken);
+        if (newRefreshToken) localStorage.setItem('ampm_refresh_token', newRefreshToken);
         processQueue(null, accessToken);
         isRefreshing = false;
         originalRequest.headers.Authorization = `Bearer ${accessToken}`;
@@ -82,6 +83,10 @@ api.interceptors.response.use(
 );
 
 function handleLogout() {
+  // Best-effort server-side revocation (rotates the token version); ignore failures.
+  if (localStorage.getItem('ampm_refresh_token')) {
+    axios.post('/api/auth/logout', {}).catch(() => undefined);
+  }
   localStorage.removeItem('ampm_access_token');
   localStorage.removeItem('ampm_refresh_token');
   if (window.location.pathname !== '/login' && window.location.pathname !== '/signup') {

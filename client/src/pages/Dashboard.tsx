@@ -128,7 +128,12 @@ export default function Dashboard() {
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await api.post('/api/auth/logout', {});
+    } catch {
+      // Ignore — clear local state regardless of server response.
+    }
     localStorage.removeItem('ampm_access_token');
     localStorage.removeItem('ampm_refresh_token');
     navigate('/login');

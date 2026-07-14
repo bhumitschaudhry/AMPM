@@ -54,7 +54,7 @@ AMPM is an asynchronous media processing service built with the PERN (PostgreSQL
 - **Database**: PostgreSQL (relational structure captures Job -> Images and User -> Notifications mappings).
 - **ORM**: Prisma (provides type-safe schema, migrations, and relationships).
 - **Job Queue**: BullMQ + Redis (provides concurrency limits, automated retries, rate limiting, and failure tracking).
-- **Authentication**: JWT (Access + Refresh tokens). Refresh tokens are checked in a rotate endpoint to fetch new short-lived access tokens.
+- **Authentication**: JWT (Access + Refresh tokens). Refresh tokens are **rotated on every use** and are **revocable**: each user carries a `token_version` (in the DB); a refresh token embeds the version it was issued under, and `/refresh` rejects any token whose version no longer matches (e.g. after `/logout`). Secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are required at startup — the server refuses to boot without them.
 - **Frontend Styling**: Vanilla CSS with a customized premium dark theme system (utilizing variables, transitions, and responsive grid layouts).
 - **API Spec**: Served dynamically via Swagger UI at `/api-docs`.
 - **CI/CD**: GitHub Actions runs each service's tests and production build on pushes and pull requests. Deployment is intentionally left to the target environment because no cloud credentials or target platform are included in this repository.
@@ -103,7 +103,8 @@ Fully detailed in `/api-docs` Swagger UI:
 |---|---|---|---|
 | `POST` | `/api/auth/signup` | No | Creates a user account and returns JWTs |
 | `POST` | `/api/auth/login` | No | Logs in and returns tokens |
-| `POST` | `/api/auth/refresh` | No | Rotates refresh token for a new access token |
+| `POST` | `/api/auth/refresh` | No | Rotates the refresh token and returns a new access + refresh token pair |
+| `POST` | `/api/auth/logout` | Yes | Revokes the user's refresh tokens (server-side) |
 | `GET`  | `/api/auth/me` | Yes | Retrieves current user |
 | `POST` | `/api/jobs` | Yes | Uploads one or more images (multipart) |
 | `GET`  | `/api/jobs` | Yes | Lists user's jobs with derived overall status |

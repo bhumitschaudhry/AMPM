@@ -70,3 +70,19 @@ describe("authRouter", () => {
     expect(meLayer.route.stack.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+import { loginSchema } from "../routes/auth-routes";
+
+describe("loginSchema", () => {
+  it("accepts a valid email and password", () => {
+    expect(loginSchema.safeParse({ email: "user@example.com", password: "secret123" }).success).toBe(true);
+  });
+
+  it("rejects a malformed email", () => {
+    expect(loginSchema.safeParse({ email: "not-an-email", password: "secret123" }).success).toBe(false);
+  });
+
+  it("rejects a missing password", () => {
+    expect(loginSchema.safeParse({ email: "user@example.com" }).success).toBe(false);
+  });
+});

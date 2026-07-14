@@ -24,13 +24,37 @@ jobRouter.post("/", (req: Request, res: Response, next: NextFunction) => {
         throw createHttpError(400, "At least one image file is required.");
       }
 
-      const job = await prisma.job.create({ data: { userId: req.userId! } });
-      const images = await createImageRecords(job.id, files);
-      await Promise.all(
-        images.map((img) =>
-          imageQueue.add("process-image", { imageId: img.id, jobId: img.jobId, storedPath: img.storedPath })
-        )
-      );
+      // ponytail: create the Job + Image rows atomically so a later enqueue failure
+      // can't leave orphaned PENDING images with no consumer.
+      const { job, images } = await prisma.$transaction(async (tx) => {
+        const created = await tx.job.create({ data: { userId: req.userId! } });
+        const createdImages = await Promise.all(
+          files.map((file) =>
+            tx.image.create({
+              data: {
+                jobId: created.id,
+                originalName: file.originalname,
+                storedPath: file.path,
+                mimeType: file.mimetype,
+                fileSize: file.size,
+              },
+            })
+          )
+        );
+        return { job: created, images: createdImages };
+      });
+
+      try {
+        await Promise.all(
+          images.map((img) =>
+            imageQueue.add("process-image", { imageId: img.id, jobId: img.jobId, storedPath: img.storedPath })
+          )
+        );
+      } catch (enqueueError) {
+        // Roll back the DB writes so no orphaned PENDING images are left behind.
+        await prisma.job.delete({ where: { id: job.id } }).catch(() => undefined);
+        throw enqueueError;
+      }
 
       res.status(201).json({
         job: {
@@ -97,7 +121,14 @@ jobRouter.get("/:jobId/images/:imageId/file", async (req: Request, res: Response
       throw createHttpError(404, "Image not found.");
     }
 
-    res.type(image.mimeType).sendFile(path.resolve(image.storedPath));
+    // Defense in depth: only serve files that resolve inside the uploads root.
+    const uploadsRoot = path.resolve(process.env.UPLOAD_DIR || "./uploads");
+    const resolvedPath = path.resolve(image.storedPath);
+    if (resolvedPath !== uploadsRoot && !resolvedPath.startsWith(uploadsRoot + path.sep)) {
+      throw createHttpError(400, "Invalid image path.");
+    }
+
+    res.type(image.mimeType).sendFile(resolvedPath);
   } catch (error) {
     next(error);
   }
@@ -189,23 +220,6 @@ function handleMulterError(error: Error): Error & { statusCode: number } {
   }
   // File filter rejection or other error
   return createHttpError(400, error.message);
-}
-
-/** Create Image records in the DB for each uploaded file. */
-async function createImageRecords(jobId: string, files: Express.Multer.File[]) {
-  return Promise.all(
-    files.map((file) =>
-      prisma.image.create({
-        data: {
-          jobId,
-          originalName: file.originalname,
-          storedPath: file.path,
-          mimeType: file.mimetype,
-          fileSize: file.size,
-        },
-      })
-    )
-  );
 }
 
 
