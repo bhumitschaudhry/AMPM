@@ -1,6 +1,14 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+// Fail closed: never start with guessable or missing signing keys.
+for (const key of ["JWT_SECRET", "JWT_REFRESH_SECRET"] as const) {
+  if (!process.env[key]) {
+    console.error(`FATAL: Required environment variable ${key} is not set. Refusing to start.`);
+    process.exit(1);
+  }
+}
+
 import express from "express";
 import cors from "cors";
 import { authRouter } from "./routes/auth-routes";
