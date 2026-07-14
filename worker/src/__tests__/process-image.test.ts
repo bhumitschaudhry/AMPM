@@ -39,13 +39,14 @@ import prisma from '../db';
 import { generateCaption } from '../pipeline/generate-caption';
 import { checkContentSafety } from '../pipeline/check-content-safety';
 
-function createMockJob(overrides: Partial<Job['data']> = {}): Job<any> {
+function createMockJob(overrides: { attemptsMade?: number; data?: Partial<Job['data']> } = {}): Job<any> {
   return {
+    attemptsMade: overrides.attemptsMade ?? 2,
     data: {
       imageId: 'img-1',
       jobId: 'job-1',
       storedPath: '/tmp/test.jpg',
-      ...overrides,
+      ...overrides.data,
     },
   } as Job<any>;
 }
@@ -99,7 +100,24 @@ describe('processImage', () => {
 
     expect(prisma.image.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ status: 'FAILED', failureReason: 'INTERNAL_ERROR' }),
+        data: expect.objectContaining({ status: 'FAILED', failureReason: 'MAX_RETRIES_EXCEEDED' }),
+      }),
+    );
+  });
+
+  it('returns an image to PENDING while BullMQ has retry attempts remaining', async () => {
+    const pipelineError = new Error('model unavailable');
+    vi.mocked(generateCaption).mockRejectedValueOnce(pipelineError);
+
+    await expect(processImage(createMockJob({ attemptsMade: 0 }))).rejects.toThrow('model unavailable');
+
+    expect(prisma.image.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'PENDING',
+          retryCount: { increment: 1 },
+          failureReason: 'INTERNAL_ERROR',
+        }),
       }),
     );
   });

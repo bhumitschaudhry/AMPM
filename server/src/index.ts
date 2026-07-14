@@ -19,9 +19,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Serve uploaded files statically
-app.use("/uploads", express.static(process.env.UPLOAD_DIR || "./uploads"));
-
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/jobs", jobRouter);

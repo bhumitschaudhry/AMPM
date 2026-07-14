@@ -21,10 +21,14 @@ function imageFileFilter(
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ): void {
-  if (ALLOWED_MIME_TYPES.includes(file.mimetype as typeof ALLOWED_MIME_TYPES[number])) {
+  const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+  const extension = path.extname(file.originalname).toLowerCase();
+  const isAllowedMimeType = ALLOWED_MIME_TYPES.includes(file.mimetype as typeof ALLOWED_MIME_TYPES[number]);
+
+  if (isAllowedMimeType && allowedExtensions.includes(extension)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type "${file.mimetype}" is not allowed. Only JPEG, PNG, and WebP images are accepted.`));
+    cb(new Error(`File "${file.originalname}" is not a JPG, PNG, or WEBP image. Please choose a supported image file.`));
   }
 }
 

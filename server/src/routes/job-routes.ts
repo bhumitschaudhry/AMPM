@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
+import path from "path";
 import prisma from "../db";
 import { imageQueue } from "../queue";
 import { deriveJobStatus } from "../constants";
@@ -65,11 +66,34 @@ jobRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
           id: img.id,
           originalName: img.originalName,
           status: img.status,
+          isFlagged: img.isFlagged,
+          flaggedCategory: img.flaggedCategory,
         })),
       };
     });
 
     res.json(jobSummaries);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** GET /:jobId/images/:imageId/file — return an owned image for authenticated preview. */
+jobRouter.get("/:jobId/images/:imageId/file", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const image = await prisma.image.findFirst({
+      where: {
+        id: req.params.imageId as string,
+        jobId: req.params.jobId as string,
+        job: { userId: req.userId },
+      },
+    });
+
+    if (!image) {
+      throw createHttpError(404, "Image not found.");
+    }
+
+    res.type(image.mimeType).sendFile(path.resolve(image.storedPath));
   } catch (error) {
     next(error);
   }
