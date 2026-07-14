@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  passwordHash String         @map("password_hash")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  jobs         Job[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model Job {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images    Image[]
+
+  @@index([userId])
+  @@map("jobs")
+}
+
+/// Each image in a job is processed independently through the AI pipeline.
+model Image {
+  id              String       @id @default(uuid())
+  jobId           String       @map("job_id")
+  originalName    String       @map("original_name")
+  storedPath      String       @map("stored_path")
+  mimeType        String       @map("mime_type")
+  fileSize        Int          @map("file_size")
+  status          ImageStatus  @default(PENDING)
+  retryCount      Int          @default(0) @map("retry_count")
+  failureReason   String?      @map("failure_reason")
+  failureMessage  String?      @map("failure_message")
+
+  // AI pipeline results
+  caption         String?
+  labels          Json?
+  safetyResult    Json?        @map("safety_result")
+  isFlagged       Boolean      @default(false) @map("is_flagged")
+  flaggedCategory String?      @map("flagged_category")
+
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+  job             Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("images")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  message   String
+  isRead    Boolean  @default(false) @map("is_read")
+  imageId   String?  @map("image_id")
+  jobId     String?  @map("job_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+enum ImageStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
