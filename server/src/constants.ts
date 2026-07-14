@@ -1,22 +1,5 @@
 import { ImageStatus } from "@prisma/client";
 
-/**
- * Failure reason codes for image processing.
- * Stored on the image record and returned via API for frontend display.
- */
-export const FAILURE_REASONS = {
-  INVALID_FILE: "File could not be read or decoded. It may be corrupt or not a valid image.",
-  UNSUPPORTED_FORMAT: "File format is not supported. Only JPG, PNG, and WEBP are accepted.",
-  FILE_TOO_LARGE: "File exceeds the 5MB size limit.",
-  AI_PROVIDER_TIMEOUT: "AI processing service did not respond in time. Please retry.",
-  AI_PROVIDER_ERROR: "AI processing service returned an error. Please retry.",
-  AI_PROVIDER_RATE_LIMITED: "AI processing service rate limit reached. Please retry later.",
-  INTERNAL_ERROR: "An unexpected error occurred during processing. Please retry.",
-  MAX_RETRIES_EXCEEDED: "Processing failed after maximum retry attempts.",
-} as const;
-
-export type FailureReasonCode = keyof typeof FAILURE_REASONS;
-
 /** Allowed MIME types for uploaded images. */
 export const ALLOWED_MIME_TYPES = [
   "image/jpeg",

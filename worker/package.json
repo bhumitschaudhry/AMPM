@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "prisma:generate": "prisma generate",
+    "prisma:generate": "prisma generate --schema ../server/prisma/schema.prisma",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

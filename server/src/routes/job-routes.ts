@@ -26,7 +26,11 @@ jobRouter.post("/", (req: Request, res: Response, next: NextFunction) => {
 
       const job = await prisma.job.create({ data: { userId: req.userId! } });
       const images = await createImageRecords(job.id, files);
-      await enqueueImages(images, job.id);
+      await Promise.all(
+        images.map((img) =>
+          imageQueue.add("process-image", { imageId: img.id, jobId: img.jobId, storedPath: img.storedPath })
+        )
+      );
 
       res.status(201).json({
         job: {
@@ -204,15 +208,4 @@ async function createImageRecords(jobId: string, files: Express.Multer.File[]) {
   );
 }
 
-/** Add each image to the BullMQ processing queue. */
-async function enqueueImages(images: { id: string; jobId: string; storedPath: string }[], jobId: string) {
-  await Promise.all(
-    images.map((img) =>
-      imageQueue.add("process-image", {
-        imageId: img.id,
-        jobId,
-        storedPath: img.storedPath,
-      })
-    )
-  );
-}
+

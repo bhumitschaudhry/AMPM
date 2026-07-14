@@ -128,8 +128,8 @@ async function saveSuccessResult(
     where: { id: imageId },
     data: {
       caption,
-      labels: JSON.parse(JSON.stringify(labels)),
-      safetyResult: JSON.parse(JSON.stringify(safetyResult)),
+      labels: structuredClone(labels),
+      safetyResult: structuredClone(safetyResult),
       status: 'COMPLETED',
       failureReason: null,
       failureMessage: null,

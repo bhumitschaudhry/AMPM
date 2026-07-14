@@ -1,15 +1,11 @@
 import 'dotenv/config';
-import { startWorker, getWorker } from './create-worker';
+import { worker } from './create-worker';
 
-const worker = startWorker();
 console.log('AMPM Worker started. Listening for image processing jobs...');
 
 async function shutdown() {
   console.log('Shutting down worker...');
-  const currentWorker = getWorker();
-  if (currentWorker) {
-    await currentWorker.close();
-  }
+  await worker.close();
   process.exit(0);
 }
 

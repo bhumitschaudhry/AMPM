@@ -1,31 +1,27 @@
 import { Worker } from 'bullmq';
-import redisConnection from './redis';
 import { processImage } from './process-image';
 
 const QUEUE_NAME = 'image-processing';
 const CONCURRENCY = 3;
 
-let worker: Worker | null = null;
+// Re-export the raw connection config so BullMQ can create its own IORedis instance,
+// avoiding version conflicts between top-level ioredis and BullMQ's bundled copy.
+const redisConnection = {
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  maxRetriesPerRequest: null as null,
+};
 
-/** Create the BullMQ worker and attach lifecycle event listeners. */
-export function startWorker(): Worker {
-  worker = new Worker(QUEUE_NAME, processImage, {
-    connection: redisConnection,
-    concurrency: CONCURRENCY,
-  });
+/** BullMQ worker that runs the AI pipeline on each image-processing job. */
+export const worker: Worker = new Worker(QUEUE_NAME, processImage, {
+  connection: redisConnection,
+  concurrency: CONCURRENCY,
+});
 
-  worker.on('completed', (job) => {
-    console.log(`[COMPLETED] Job ${job.id} — image ${job.data.imageId} processed successfully.`);
-  });
+worker.on('completed', (job) => {
+  console.log(`[COMPLETED] Job ${job.id} — image ${job.data.imageId} processed successfully.`);
+});
 
-  worker.on('failed', (job, error) => {
-    console.error(`[FAILED] Job ${job?.id} — ${error.message}`);
-  });
-
-  return worker;
-}
-
-/** Return the current worker instance for graceful shutdown. */
-export function getWorker(): Worker | null {
-  return worker;
-}
+worker.on('failed', (job, error) => {
+  console.error(`[FAILED] Job ${job?.id} — ${error.message}`);
+});
