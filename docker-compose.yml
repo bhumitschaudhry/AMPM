@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ampm
+      POSTGRES_PASSWORD: ampm_secret
+      POSTGRES_DB: ampm
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ampm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://ampm:ampm_secret@postgres:5432/ampm?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-change-me-refresh-in-production}
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
+      HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
+      UPLOAD_DIR: /app/uploads
+      MAX_FILE_SIZE_MB: 5
+      PORT: 3001
+      CLIENT_URL: http://localhost:5173
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://ampm:ampm_secret@postgres:5432/ampm?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
+      HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
+      UPLOAD_DIR: /app/uploads
+      MAX_RETRIES: 3
+      RETRY_DELAY_MS: 5000
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - server
+
+volumes:
+  pgdata:
+  uploads:
