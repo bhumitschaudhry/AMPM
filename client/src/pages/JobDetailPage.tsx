@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../api';
 import { Job, Image } from '../types';
+import ImagePreview from '../components/ImagePreview';
 
 export default function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
@@ -102,11 +103,7 @@ export default function JobDetailPage() {
           {job.images.map((img) => (
             <div key={img.id} className={`image-card ${img.isFlagged ? 'flagged' : ''}`}>
               <div className="image-preview-container">
-                <img
-                  src={`/uploads/${img.storedPath.replace(/\\/g, '/')}`}
-                  alt={img.originalName}
-                  className="image-preview"
-                />
+                <ImagePreview jobId={job.id} imageId={img.id} alt={img.originalName} />
                 {img.isFlagged && (
                   <div className="safety-flag-badge">
                     ⚠️ FLAGGED: {img.flaggedCategory?.toUpperCase()}

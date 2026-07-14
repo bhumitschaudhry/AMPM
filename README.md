@@ -59,6 +59,7 @@ AMPM is a robust, production-ready, asynchronous media processing microservice b
 - **Authentication**: JWT (Access + Refresh tokens). Refresh tokens are checked in a rotate endpoint to fetch new short-lived access tokens.
 - **Frontend Styling**: Vanilla CSS with a customized premium dark theme system (utilizing variables, transitions, and responsive grid layouts).
 - **API Spec**: Served dynamically via Swagger UI at `/api-docs`.
+- **CI/CD**: GitHub Actions runs each service's tests and production build on pushes and pull requests. Deployment is intentionally left to the target environment because no cloud credentials or target platform are included in this repository.
 
 ---
 
@@ -134,3 +135,8 @@ If traffic increases by 10x:
 - **Worker Scaling**: Spin up multiple instances of the worker service. BullMQ handles horizontal scaling seamlessly; tasks are distributed automatically among available worker pods.
 - **Redis Clustering**: Move Redis to a managed memory store (AWS ElastiCache / Redis Enterprise) to handle high-volume queue transactions.
 - **S3 / CDN Integration**: Swap the local disk storage module with AWS S3, and serve images via CloudFront to reduce network strain on the API server.
+
+## Known Limitations
+
+- A deployed URL is not included because this repository has no cloud account, deployment target, or credentials. The included Compose configuration is the supported local deployment path.
+- Uploaded images are stored on a Docker volume. Use object storage before running multiple API hosts or deploying to ephemeral infrastructure.

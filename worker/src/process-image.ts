@@ -32,9 +32,22 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
     }
   } catch (error) {
     const { code, message } = categorizeError(error);
-    await markImageFailed(imageId, code, message);
+    if (hasRetryAttemptsRemaining(job)) {
+      await markImagePendingForRetry(imageId, code, message);
+    } else {
+      await markImageFailed(imageId, code, message);
+    }
     throw error;
   }
+}
+
+/** Return whether BullMQ will run this image again after the current failure. */
+function hasRetryAttemptsRemaining(job: Job<ImageJobData>): boolean {
+  const configuredAttempts = typeof job.opts?.attempts === 'number'
+    ? job.opts.attempts
+    : parseInt(process.env.MAX_RETRIES || '3', 10);
+
+  return job.attemptsMade + 1 < configuredAttempts;
 }
 
 /** Read file from disk and normalize through sharp to validate it's a real image. */
@@ -65,6 +78,8 @@ async function saveSuccessResult(
       labels: JSON.parse(JSON.stringify(labels)),
       safetyResult: JSON.parse(JSON.stringify(safetyResult)),
       status: 'COMPLETED',
+      failureReason: null,
+      failureMessage: null,
     },
   });
 }
@@ -91,10 +106,28 @@ async function flagImage(imageId: string, jobId: string, flaggedCategory: string
   });
 }
 
-/** Record failure details so the user can see what went wrong. */
+/** Record a non-terminal failure while BullMQ waits to retry the image. */
+async function markImagePendingForRetry(imageId: string, failureReason: string, failureMessage: string) {
+  await prisma.image.update({
+    where: { id: imageId },
+    data: {
+      status: 'PENDING',
+      retryCount: { increment: 1 },
+      failureReason,
+      failureMessage,
+    },
+  });
+}
+
+/** Record the final failure after BullMQ exhausts its configured attempts. */
 async function markImageFailed(imageId: string, failureReason: string, failureMessage: string) {
   await prisma.image.update({
     where: { id: imageId },
-    data: { status: 'FAILED', failureReason, failureMessage },
+    data: {
+      status: 'FAILED',
+      retryCount: { increment: 1 },
+      failureReason: 'MAX_RETRIES_EXCEEDED',
+      failureMessage: `Processing failed after all retry attempts. Last error (${failureReason}): ${failureMessage}`,
+    },
   });
 }

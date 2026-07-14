@@ -262,9 +262,12 @@ export default function Dashboard() {
                 >
                   <div className="job-card-header">
                     <span className="job-id">Job #{job.id.substring(0, 8)}</span>
-                    <span className={`status-badge status-${job.status.toLowerCase()}`}>
-                      {job.status.replace('_', ' ')}
-                    </span>
+                    <div>
+                      {job.images.some((image) => image.isFlagged) && <span>⚠️ Flagged </span>}
+                      <span className={`status-badge status-${job.status.toLowerCase()}`}>
+                        {job.status.replace('_', ' ')}
+                      </span>
+                    </div>
                   </div>
                   <div className="job-card-body">
                     <div className="job-meta-item">
