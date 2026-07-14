@@ -77,7 +77,7 @@ describe("authenticateToken", () => {
 
   it("sets req.userId and calls next() when token is valid", () => {
     process.env.JWT_SECRET = "test_secret";
-    vi.spyOn(jwt, "verify").mockReturnValue({ userId: "user-123", email: "a@b.com" });
+    (vi.spyOn(jwt, "verify") as any).mockReturnValue({ userId: "user-123", email: "a@b.com" });
 
     const req = mockReq("Bearer valid.jwt.token");
     const res = mockRes();
