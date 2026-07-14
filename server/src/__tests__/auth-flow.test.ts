@@ -44,13 +44,18 @@ beforeEach(() => {
 
 afterAll(() => server?.close());
 
-async function signup() {
+interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+async function signup(): Promise<TokenPair> {
   const res = await fetch(`${baseUrl}/signup`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email: "user@example.com", password: "secret123" }),
   });
-  return res.json();
+  return (await res.json()) as TokenPair;
 }
 
 describe("refresh token rotation + revocation", () => {
@@ -63,7 +68,7 @@ describe("refresh token rotation + revocation", () => {
       body: JSON.stringify({ refreshToken }),
     });
     expect(first.status).toBe(200);
-    const firstBody = await first.json();
+    const firstBody = (await first.json()) as TokenPair;
     expect(firstBody.accessToken).toBeTypeOf("string");
     expect(firstBody.refreshToken).toBeTypeOf("string");
 
@@ -87,7 +92,7 @@ describe("refresh token rotation + revocation", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refreshToken }),
     });
-    const { refreshToken: rotated } = await refresh.json();
+    const { refreshToken: rotated } = (await refresh.json()) as TokenPair;
 
     const logout = await fetch(`${baseUrl}/logout`, {
       method: "POST",
