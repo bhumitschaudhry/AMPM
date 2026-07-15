@@ -3,7 +3,7 @@ FROM node:20-alpine
 WORKDIR /app
 
 COPY worker/package.json worker/package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 COPY server/prisma ./prisma
 RUN npx prisma generate --schema ./prisma/schema.prisma
