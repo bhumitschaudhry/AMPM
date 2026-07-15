@@ -1,7 +1,8 @@
 FROM node:20-alpine AS build
 WORKDIR /app
-ARG VITE_CLERK_PUBLISHABLE_KEY
-ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
+# CLERK DISABLED — uncomment these two lines to pass the Clerk publishable key at build time
+# ARG VITE_CLERK_PUBLISHABLE_KEY
+# ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .

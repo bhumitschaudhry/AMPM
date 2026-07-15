@@ -15,8 +15,9 @@ vi.mock("../db", () => ({
           userStore.users.find(
             (user) =>
               user.email === where.email ||
-              user.id === where.id ||
-              user.clerkUserId === where.clerkUserId,
+              user.id === where.id,
+              // CLERK DISABLED — restore clerkUserId lookup when Clerk is re-enabled:
+              // || user.clerkUserId === where.clerkUserId
           ) || null,
         ),
       ),
@@ -24,7 +25,8 @@ vi.mock("../db", () => ({
         const user = {
           id: "u-" + Math.random(),
           email: data.email,
-          clerkUserId: data.clerkUserId ?? null,
+          // CLERK DISABLED — restore when Clerk is re-enabled:
+          // clerkUserId: data.clerkUserId ?? null,
           passwordHash: data.passwordHash,
           tokenVersion: 0,
         };
@@ -42,41 +44,45 @@ vi.mock("../db", () => ({
   },
 }));
 
-const { verifyTokenMock, getUserMock } = vi.hoisted(() => ({
-  verifyTokenMock: vi.fn(),
-  getUserMock: vi.fn(),
-}));
-
-vi.mock("@clerk/backend", () => ({
-  verifyToken: verifyTokenMock,
-  createClerkClient: vi.fn(() => ({
-    users: {
-      getUser: getUserMock,
-    },
-  })),
-}));
+// CLERK DISABLED — Clerk backend mock preserved in comments:
+// const { verifyTokenMock, getUserMock } = vi.hoisted(() => ({
+//   verifyTokenMock: vi.fn(),
+//   getUserMock: vi.fn(),
+// }));
+//
+// vi.mock("@clerk/backend", () => ({
+//   verifyToken: verifyTokenMock,
+//   createClerkClient: vi.fn(() => ({
+//     users: {
+//       getUser: getUserMock,
+//     },
+//   })),
+// }));
 
 type TestUser = {
   id: string;
   email: string;
   passwordHash: string | null;
   tokenVersion: number;
-  clerkUserId?: string | null;
+  // CLERK DISABLED — restore when Clerk is re-enabled:
+  // clerkUserId?: string | null;
 };
 
 function addUser(user: TestUser) {
   userStore.users.push({
-    clerkUserId: null,
+    // CLERK DISABLED — restore when Clerk is re-enabled:
+    // clerkUserId: null,
     ...user,
   });
 }
 
-function mockVerifiedClerkIdentity(identity: { userId: string; email?: string }) {
-  verifyTokenMock.mockResolvedValue({
-    sub: identity.userId,
-    email: identity.email,
-  });
-}
+// CLERK DISABLED — Clerk helper functions preserved in comments:
+// function mockVerifiedClerkIdentity(identity: { userId: string; email?: string }) {
+//   verifyTokenMock.mockResolvedValue({
+//     sub: identity.userId,
+//     email: identity.email,
+//   });
+// }
 
 function addPasswordUser() {
   addUser({
@@ -87,15 +93,16 @@ function addPasswordUser() {
   });
 }
 
-function addOAuthOnlyUser() {
-  addUser({
-    id: "oauth-only-user",
-    email: "oauth@example.com",
-    clerkUserId: "clerk_oauth_user",
-    passwordHash: null,
-    tokenVersion: 0,
-  });
-}
+// CLERK DISABLED — OAuth-only user helper preserved in comments:
+// function addOAuthOnlyUser() {
+//   addUser({
+//     id: "oauth-only-user",
+//     email: "oauth@example.com",
+//     clerkUserId: "clerk_oauth_user",
+//     passwordHash: null,
+//     tokenVersion: 0,
+//   });
+// }
 
 let server: Server;
 let baseUrl: string;
@@ -103,10 +110,12 @@ let baseUrl: string;
 beforeEach(() => {
   process.env.JWT_SECRET = "test_jwt_secret";
   process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
-  process.env.CLERK_SECRET_KEY = "test_clerk_secret";
+  // CLERK DISABLED — restore when Clerk is re-enabled:
+  // process.env.CLERK_SECRET_KEY = "test_clerk_secret";
   userStore.users = [];
-  verifyTokenMock.mockReset();
-  getUserMock.mockReset();
+  // CLERK DISABLED — restore when Clerk is re-enabled:
+  // verifyTokenMock.mockReset();
+  // getUserMock.mockReset();
   const app = express();
   app.use(express.json());
   app.use("/api/auth", authRouter);
@@ -135,172 +144,79 @@ async function signup(): Promise<TokenPair> {
   return (await res.json()) as TokenPair;
 }
 
-describe("POST /clerk", () => {
-  it("rejects a missing Clerk bearer token with 401", async () => {
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-    });
+// CLERK DISABLED — POST /clerk test suite preserved in comments for re-enablement:
+// describe("POST /clerk", () => {
+//   it("rejects a missing Clerk bearer token with 401", async () => {
+//     const response = await fetch(`${baseUrl}/clerk`, {
+//       method: "POST",
+//     });
+//     expect(response.status).toBe(401);
+//     await expect(response.json()).resolves.toMatchObject({ error: expect.any(String) });
+//   });
+//
+//   it("rejects an invalid Clerk token with 401", async () => {
+//     verifyTokenMock.mockRejectedValue(new Error("invalid token"));
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer bad-token" } });
+//     expect(response.status).toBe(401);
+//     await expect(response.json()).resolves.toMatchObject({ error: expect.any(String) });
+//   });
+//
+//   it("creates an OAuth-only user from a verified Clerk identity", async () => {
+//     mockVerifiedClerkIdentity({ userId: "clerk_user_123", email: "oauth@example.com" });
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer clerk-session-token" } });
+//     expect(response.status).toBe(200);
+//     const body = (await response.json()) as AuthResponse;
+//     expect(body.accessToken).toEqual(expect.any(String));
+//     expect(body.user).toMatchObject({ email: "oauth@example.com" });
+//     expect(userStore.users[0]).toMatchObject({ email: "oauth@example.com", clerkUserId: "clerk_user_123", passwordHash: null });
+//   });
+//
+//   it("loads a verified primary email when the Clerk token only contains a subject", async () => {
+//     verifyTokenMock.mockResolvedValue({ sub: "clerk_fallback_user" });
+//     getUserMock.mockResolvedValue({ primaryEmailAddressId: "email_123", emailAddresses: [{ id: "email_123", emailAddress: "fallback@example.com", verification: { status: "verified" } }] });
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer fallback-token" } });
+//     expect(response.status).toBe(200);
+//     await expect(response.json()).resolves.toMatchObject({ user: { email: "fallback@example.com" } });
+//   });
+//
+//   it("rejects a Clerk user without a verified primary email", async () => {
+//     verifyTokenMock.mockResolvedValue({ sub: "clerk_unverified_user" });
+//     getUserMock.mockResolvedValue({ primaryEmailAddressId: null, emailAddresses: [] });
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer unverified-token" } });
+//     expect(response.status).toBe(400);
+//     await expect(response.json()).resolves.toMatchObject({ error: "Your Clerk account needs a verified primary email address before you can sign in." });
+//   });
+//
+//   it("returns the existing user for a known Clerk identity", async () => {
+//     addUser({ id: "existing-clerk-user", email: "existing@example.com", clerkUserId: "clerk_known_user", passwordHash: null, tokenVersion: 2 });
+//     mockVerifiedClerkIdentity({ userId: "clerk_known_user", email: "ignored@example.com" });
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer known-session-token" } });
+//     expect(response.status).toBe(200);
+//     await expect(response.json()).resolves.toMatchObject({ user: { id: "existing-clerk-user", email: "existing@example.com" } });
+//   });
+//
+//   it("rejects a verified email that belongs to a password account with 409", async () => {
+//     addPasswordUser();
+//     mockVerifiedClerkIdentity({ userId: "clerk_conflict_user", email: "user@example.com" });
+//     const response = await fetch(`${baseUrl}/clerk`, { method: "POST", headers: { Authorization: "Bearer conflict-token" } });
+//     expect(response.status).toBe(409);
+//     await expect(response.json()).resolves.toMatchObject({ error: "An AMPM account already exists for this email. Sign in with email and password." });
+//   });
+// });
 
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({
-      error: expect.any(String),
-    });
-  });
-
-  it("rejects an invalid Clerk token with 401", async () => {
-    verifyTokenMock.mockRejectedValue(new Error("invalid token"));
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer bad-token",
-      },
-    });
-
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({
-      error: expect.any(String),
-    });
-  });
-
-  it("creates an OAuth-only user from a verified Clerk identity", async () => {
-    mockVerifiedClerkIdentity({
-      userId: "clerk_user_123",
-      email: "oauth@example.com",
-    });
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer clerk-session-token",
-      },
-    });
-
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as AuthResponse;
-    expect(body.accessToken).toEqual(expect.any(String));
-    expect(body.refreshToken).toEqual(expect.any(String));
-    expect(body.user).toMatchObject({
-      email: "oauth@example.com",
-    });
-    expect(body.user.id).toEqual(expect.any(String));
-    expect(userStore.users[0]).toMatchObject({
-      email: "oauth@example.com",
-      clerkUserId: "clerk_user_123",
-      passwordHash: null,
-    });
-  });
-
-  it("loads a verified primary email when the Clerk token only contains a subject", async () => {
-    verifyTokenMock.mockResolvedValue({ sub: "clerk_fallback_user" });
-    getUserMock.mockResolvedValue({
-      primaryEmailAddressId: "email_123",
-      emailAddresses: [
-        {
-          id: "email_123",
-          emailAddress: "fallback@example.com",
-          verification: { status: "verified" },
-        },
-      ],
-    });
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: { Authorization: "Bearer fallback-token" },
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      user: { email: "fallback@example.com" },
-    });
-  });
-
-  it("rejects a Clerk user without a verified primary email", async () => {
-    verifyTokenMock.mockResolvedValue({ sub: "clerk_unverified_user" });
-    getUserMock.mockResolvedValue({
-      primaryEmailAddressId: null,
-      emailAddresses: [],
-    });
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: { Authorization: "Bearer unverified-token" },
-    });
-
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "Your Clerk account needs a verified primary email address before you can sign in.",
-    });
-  });
-
-  it("returns the existing user for a known Clerk identity", async () => {
-    addUser({
-      id: "existing-clerk-user",
-      email: "existing@example.com",
-      clerkUserId: "clerk_known_user",
-      passwordHash: null,
-      tokenVersion: 2,
-    });
-    mockVerifiedClerkIdentity({
-      userId: "clerk_known_user",
-      email: "ignored@example.com",
-    });
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer known-session-token",
-      },
-    });
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      user: {
-        id: "existing-clerk-user",
-        email: "existing@example.com",
-      },
-      accessToken: expect.any(String),
-      refreshToken: expect.any(String),
-    });
-  });
-
-  it("rejects a verified email that belongs to a password account with 409", async () => {
-    addPasswordUser();
-    mockVerifiedClerkIdentity({
-      userId: "clerk_conflict_user",
-      email: "user@example.com",
-    });
-
-    const response = await fetch(`${baseUrl}/clerk`, {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer conflict-token",
-      },
-    });
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "An AMPM account already exists for this email. Sign in with email and password.",
-    });
-  });
-});
-
-describe("login", () => {
-  it("rejects local login for an OAuth-only user", async () => {
-    addOAuthOnlyUser();
-
-    const response = await fetch(`${baseUrl}/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
-    });
-
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "Invalid email or password.",
-    });
-  });
-});
+// CLERK DISABLED — local login rejects OAuth-only users test preserved in comments:
+// describe("login", () => {
+//   it("rejects local login for an OAuth-only user", async () => {
+//     addOAuthOnlyUser();
+//     const response = await fetch(`${baseUrl}/login`, {
+//       method: "POST",
+//       headers: { "Content-Type": "application/json" },
+//       body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
+//     });
+//     expect(response.status).toBe(401);
+//     await expect(response.json()).resolves.toMatchObject({ error: "Invalid email or password." });
+//   });
+// });
 
 describe("refresh token rotation + revocation", () => {
   it("rotates the refresh token on /refresh and rejects the old one", async () => {

@@ -1,40 +1,34 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useSignIn } from '@clerk/react';
+// CLERK DISABLED — uncomment to re-enable Google SSO via Clerk
+// import { useSignIn } from '@clerk/react';
 import api from '../api';
 
-function getClerkPublishableKey() {
-  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-}
+// CLERK DISABLED — uncomment to restore Clerk publishable key lookup
+// function getClerkPublishableKey() {
+//   return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+// }
 
 type LoginCardProps = {
   error: string | null;
   email: string;
   password: string;
   isLoading: boolean;
-  isGoogleLoading: boolean;
-  isGoogleEnabled: boolean;
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: (event: React.FormEvent) => Promise<void>;
-  onGoogleSignIn: () => Promise<void>;
 };
 
-/** Show the shared login card with local and Google sign-in actions. */
+/** Show the login card with email/password sign-in. */
 function LoginCard({
   error,
   email,
   password,
   isLoading,
-  isGoogleLoading,
-  isGoogleEnabled,
   onEmailChange,
   onPasswordChange,
   onSubmit,
-  onGoogleSignIn,
 }: LoginCardProps) {
-  const isGoogleDisabled = isLoading || isGoogleLoading || !isGoogleEnabled;
-
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -75,6 +69,7 @@ function LoginCard({
           </button>
         </form>
 
+        {/* CLERK DISABLED — Google SSO button removed. Uncomment when Clerk is re-enabled:
         <button
           type="button"
           className="btn btn-secondary"
@@ -83,10 +78,7 @@ function LoginCard({
         >
           {isGoogleLoading ? 'Redirecting to Google...' : 'Continue with Google'}
         </button>
-
-        {!isGoogleEnabled && (
-          <p>Google sign-in is unavailable until Clerk is configured.</p>
-        )}
+        */}
 
         <p className="auth-footer">
           Don't have an account? <Link to="/signup">Create one now</Link>
@@ -96,43 +88,12 @@ function LoginCard({
   );
 }
 
-/** Provide the existing email/password login flow when Clerk is disabled. */
-function LocalLoginPage() {
-  return <LoginPageContent isGoogleEnabled={false} onGoogleSignIn={async () => undefined} />;
-}
-
-/** Provide the Google redirect action when Clerk is configured. */
-function ClerkLoginPage() {
-  const { fetchStatus, signIn } = useSignIn();
-
-  async function handleGoogleSignIn() {
-    if (fetchStatus === 'fetching') {
-      return;
-    }
-
-    await signIn.sso({
-      strategy: 'oauth_google',
-      redirectUrl: '/sso-callback',
-      redirectCallbackUrl: '/sso-callback',
-    });
-  }
-
-  return <LoginPageContent isGoogleEnabled={fetchStatus !== 'fetching'} onGoogleSignIn={handleGoogleSignIn} />;
-}
-
-/** Handle the local password login flow and shared error state. */
-function LoginPageContent({
-  isGoogleEnabled,
-  onGoogleSignIn,
-}: {
-  isGoogleEnabled: boolean;
-  onGoogleSignIn: () => Promise<void>;
-}) {
+/** Handle the local email/password login flow. */
+export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const navigate = useNavigate();
 
   async function handleSubmit(event: React.FormEvent) {
@@ -161,39 +122,52 @@ function LoginPageContent({
     }
   }
 
-  async function handleGoogleSignIn() {
-    setIsGoogleLoading(true);
-    setError(null);
-
-    try {
-      await onGoogleSignIn();
-    } catch (err: any) {
-      setError(err.message || 'Could not start Google sign-in. Please try again.');
-      setIsGoogleLoading(false);
-    }
-  }
-
   return (
     <LoginCard
       error={error}
       email={email}
       password={password}
       isLoading={isLoading}
-      isGoogleLoading={isGoogleLoading}
-      isGoogleEnabled={isGoogleEnabled}
       onEmailChange={setEmail}
       onPasswordChange={setPassword}
       onSubmit={handleSubmit}
-      onGoogleSignIn={handleGoogleSignIn}
     />
   );
 }
 
-/** Render the right login experience for the current Clerk configuration. */
-export default function LoginPage() {
-  if (!getClerkPublishableKey()) {
-    return <LocalLoginPage />;
-  }
-
-  return <ClerkLoginPage />;
-}
+// CLERK DISABLED — original Clerk-aware components preserved below for easy re-enablement:
+//
+// type LoginCardPropsWithGoogle = LoginCardProps & {
+//   isGoogleLoading: boolean;
+//   isGoogleEnabled: boolean;
+//   onGoogleSignIn: () => Promise<void>;
+// };
+//
+// /** Provide the existing email/password login flow when Clerk is disabled. */
+// function LocalLoginPage() {
+//   return <LoginPageContent isGoogleEnabled={false} onGoogleSignIn={async () => undefined} />;
+// }
+//
+// /** Provide the Google redirect action when Clerk is configured. */
+// function ClerkLoginPage() {
+//   const { fetchStatus, signIn } = useSignIn();
+//
+//   async function handleGoogleSignIn() {
+//     if (fetchStatus === 'fetching') return;
+//     await signIn.sso({
+//       strategy: 'oauth_google',
+//       redirectUrl: '/sso-callback',
+//       redirectCallbackUrl: '/sso-callback',
+//     });
+//   }
+//
+//   return <LoginPageContent isGoogleEnabled={fetchStatus !== 'fetching'} onGoogleSignIn={handleGoogleSignIn} />;
+// }
+//
+// /** Render the right login experience for the current Clerk configuration. */
+// export default function LoginPage() {
+//   if (!getClerkPublishableKey()) {
+//     return <LocalLoginPage />;
+//   }
+//   return <ClerkLoginPage />;
+// }

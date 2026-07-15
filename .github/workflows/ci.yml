@@ -107,9 +107,9 @@ jobs:
           # Cache layers across runs using GitHub's cache backend.
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-          # Provide a dummy build arg so the client Dockerfile doesn't fail.
-          build-args: |
-            VITE_CLERK_PUBLISHABLE_KEY=pk_test_placeholder
+          # CLERK DISABLED — no Clerk build args needed. Uncomment below when re-enabling:
+          # build-args: |
+          #   VITE_CLERK_PUBLISHABLE_KEY=pk_test_placeholder
 
   # ── Gate ─────────────────────────────────────────────────────────────────────
   # A single job that depends on every check. Merge-branch protection rules only

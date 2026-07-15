@@ -5,7 +5,8 @@ import { z } from "zod";
 import prisma from "../db";
 import { authenticateToken } from "../middleware/auth-middleware";
 import { createHttpError } from "../helpers/create-error";
-import { verifyClerkSessionToken } from "../auth/clerk-auth";
+// CLERK DISABLED — uncomment to re-enable Google OAuth token exchange
+// import { verifyClerkSessionToken } from "../auth/clerk-auth";
 
 export const authRouter = Router();
 
@@ -35,20 +36,20 @@ function generateTokens(userId: string, email: string, tokenVersion: number) {
   return { accessToken, refreshToken };
 }
 
-/** Extract a Clerk bearer token or reject the exchange request. */
-function getClerkBearerToken(req: Request): string {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    throw createHttpError(401, "Clerk authorization token is required. Send a Bearer token in the Authorization header.");
-  }
-  return authHeader.slice(7);
-}
+// CLERK DISABLED — helper functions for Clerk token exchange preserved in comments:
+// function getClerkBearerToken(req: Request): string {
+//   const authHeader = req.headers.authorization;
+//   if (!authHeader?.startsWith("Bearer ")) {
+//     throw createHttpError(401, "Clerk authorization token is required. Send a Bearer token in the Authorization header.");
+//   }
+//   return authHeader.slice(7);
+// }
+//
+// function issueUserTokens(user: { id: string; email: string; tokenVersion: number }) {
+//   const tokens = generateTokens(user.id, user.email, user.tokenVersion);
+//   return { ...tokens, user: { id: user.id, email: user.email } };
+// }
 
-/** Issue the AMPM token pair for an authenticated user. */
-function issueUserTokens(user: { id: string; email: string; tokenVersion: number }) {
-  const tokens = generateTokens(user.id, user.email, user.tokenVersion);
-  return { ...tokens, user: { id: user.id, email: user.email } };
-}
 
 /** POST /signup — register a new user and return tokens. */
 authRouter.post("/signup", async (req: Request, res: Response, next: NextFunction) => {
@@ -105,33 +106,33 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
   }
 });
 
-/** POST /clerk — exchange a verified Clerk session for AMPM tokens. */
-authRouter.post("/clerk", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const clerkToken = getClerkBearerToken(req);
-    const identity = await verifyClerkSessionToken(clerkToken);
-
-    const clerkUser = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
-    if (clerkUser) {
-      return res.json(issueUserTokens(clerkUser));
-    }
-
-    const emailUser = await prisma.user.findUnique({ where: { email: identity.email } });
-    if (emailUser?.passwordHash) {
-      throw createHttpError(409, "An AMPM account already exists for this email. Sign in with email and password.");
-    }
-    if (emailUser) {
-      throw createHttpError(409, "This email is already linked to another account.");
-    }
-
-    const user = await prisma.user.create({
-      data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
-    });
-    res.json(issueUserTokens(user));
-  } catch (error) {
-    next(error);
-  }
-});
+// CLERK DISABLED — POST /clerk route preserved in comments for re-enablement:
+// authRouter.post("/clerk", async (req: Request, res: Response, next: NextFunction) => {
+//   try {
+//     const clerkToken = getClerkBearerToken(req);
+//     const identity = await verifyClerkSessionToken(clerkToken);
+//
+//     const clerkUser = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
+//     if (clerkUser) {
+//       return res.json(issueUserTokens(clerkUser));
+//     }
+//
+//     const emailUser = await prisma.user.findUnique({ where: { email: identity.email } });
+//     if (emailUser?.passwordHash) {
+//       throw createHttpError(409, "An AMPM account already exists for this email. Sign in with email and password.");
+//     }
+//     if (emailUser) {
+//       throw createHttpError(409, "This email is already linked to another account.");
+//     }
+//
+//     const user = await prisma.user.create({
+//       data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
+//     });
+//     res.json(issueUserTokens(user));
+//   } catch (error) {
+//     next(error);
+//   }
+// });
 
 /**
  * POST /refresh — rotate the refresh token and issue a new access token.

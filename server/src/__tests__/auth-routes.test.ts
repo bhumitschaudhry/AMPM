@@ -5,10 +5,11 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
 vi.mock("../db", () => ({ default: { user: { findUnique: vi.fn(), create: vi.fn() } } }));
-vi.mock("@clerk/backend", () => ({
-  verifyToken: vi.fn(),
-  createClerkClient: vi.fn(),
-}));
+// CLERK DISABLED — Clerk backend mock preserved in comments:
+// vi.mock("@clerk/backend", () => ({
+//   verifyToken: vi.fn(),
+//   createClerkClient: vi.fn(),
+// }));
 
 describe("authRouter", () => {
   beforeEach(() => {
@@ -22,15 +23,17 @@ describe("authRouter", () => {
     expect(typeof authRouter).toBe("function");
   });
 
-  it("has signup, login, clerk, refresh, and me routes stacked", () => {
+  it("has signup, login, refresh, and me routes stacked", () => {
     // Verify routes are registered by inspecting stack
     const stack = (authRouter as any).stack;
-    expect(stack.length).toBeGreaterThanOrEqual(5);
+    // CLERK DISABLED — route count is 4 (was 5 with /clerk). Update when re-enabling.
+    expect(stack.length).toBeGreaterThanOrEqual(4);
 
     const methods = stack.map((layer: any) => layer.route?.path).filter(Boolean);
     expect(methods).toContain("/signup");
     expect(methods).toContain("/login");
-    expect(methods).toContain("/clerk");
+    // CLERK DISABLED — uncomment to re-enable the /clerk route assertion:
+    // expect(methods).toContain("/clerk");
     expect(methods).toContain("/refresh");
     expect(methods).toContain("/me");
   });
@@ -51,13 +54,14 @@ describe("authRouter", () => {
     expect(loginLayer.route.methods).toEqual({ post: true });
   });
 
-  it("registers POST /clerk", () => {
-    const clerkLayer = (authRouter as any).stack.find(
-      (l: any) => l.route?.path === "/clerk"
-    );
-    expect(clerkLayer).toBeDefined();
-    expect(clerkLayer.route.methods).toEqual({ post: true });
-  });
+  // CLERK DISABLED — POST /clerk route assertion preserved in comments:
+  // it("registers POST /clerk", () => {
+  //   const clerkLayer = (authRouter as any).stack.find(
+  //     (l: any) => l.route?.path === "/clerk"
+  //   );
+  //   expect(clerkLayer).toBeDefined();
+  //   expect(clerkLayer.route.methods).toEqual({ post: true });
+  // });
 
   it("refresh route exists with POST method", () => {
     const refreshLayer = (authRouter as any).stack.find(
