@@ -18,8 +18,8 @@ vi.mock('../db', () => ({
   },
 }));
 
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn().mockResolvedValue(Buffer.from('fake-image')),
+vi.mock('../storage/r2-client', () => ({
+  downloadFromR2: vi.fn().mockResolvedValue(Buffer.from('fake-image')),
 }));
 
 vi.mock('sharp', () => ({
