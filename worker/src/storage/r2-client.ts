@@ -1,22 +1,32 @@
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { Readable } from "stream";
 
-// Cloudflare R2 uses the S3 API with a custom endpoint per account.
-const r2 = new S3Client({
-  region: "auto",
-  endpoint: `https://${requireEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: requireEnv("R2_ACCESS_KEY_ID"),
-    secretAccessKey: requireEnv("R2_SECRET_ACCESS_KEY"),
-  },
-});
+// Lazy singleton — created on first use so importing this module during tests
+// doesn't throw if R2 env vars aren't set.
+let _r2: S3Client | null = null;
 
-const BUCKET = requireEnv("R2_BUCKET_NAME");
+function getR2Client(): S3Client {
+  if (!_r2) {
+    _r2 = new S3Client({
+      region: "auto",
+      endpoint: `https://${requireEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: requireEnv("R2_ACCESS_KEY_ID"),
+        secretAccessKey: requireEnv("R2_SECRET_ACCESS_KEY"),
+      },
+    });
+  }
+  return _r2;
+}
+
+function getBucket(): string {
+  return requireEnv("R2_BUCKET_NAME");
+}
 
 /** Download an object from R2 and return it as a Buffer for the AI pipeline. */
 export async function downloadFromR2(key: string): Promise<Buffer> {
-  const response = await r2.send(
-    new GetObjectCommand({ Bucket: BUCKET, Key: key })
+  const response = await getR2Client().send(
+    new GetObjectCommand({ Bucket: getBucket(), Key: key })
   );
 
   if (!response.Body) {
@@ -35,7 +45,7 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Throw clearly if a required env var is missing — fail at startup, not mid-job. */
+/** Throw clearly if a required env var is missing — fail at call time, not import time. */
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
