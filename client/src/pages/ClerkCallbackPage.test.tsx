@@ -2,14 +2,13 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ClerkCallbackPage from './ClerkCallbackPage';
-import api from '../api';
+const navigateMock = vi.hoisted(() => vi.fn());
+const useAuthMock = vi.hoisted(() => vi.fn());
+const postMock = vi.hoisted(() => vi.fn());
 
-const navigateMock = vi.fn();
-const useAuthMock = vi.fn();
-
-vi.mock('../api', () => ({
+vi.mock('axios', () => ({
   default: {
-    post: vi.fn(),
+    post: postMock,
   },
 }));
 
@@ -39,7 +38,7 @@ describe('ClerkCallbackPage', () => {
       isSignedIn: true,
       getToken: vi.fn().mockResolvedValue('clerk-session'),
     });
-    vi.mocked(api.post).mockResolvedValueOnce({
+    postMock.mockResolvedValueOnce({
       data: {
         accessToken: 'ampm-access',
         refreshToken: 'ampm-refresh',
@@ -53,8 +52,8 @@ describe('ClerkCallbackPage', () => {
     );
 
     await waitFor(() =>
-      expect(api.post).toHaveBeenCalledWith(
-        '/auth/clerk',
+      expect(postMock).toHaveBeenCalledWith(
+        '/api/auth/clerk',
         {},
         {
           headers: {

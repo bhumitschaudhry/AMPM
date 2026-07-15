@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
+import axios from 'axios';
 import { AuthenticateWithRedirectCallback, useAuth } from '@clerk/react';
 import { Navigate, useNavigate } from 'react-router-dom';
-import api from '../api';
 
 const callbackErrorMessage = 'Could not complete Google sign-in. Please try again.';
 
@@ -29,8 +29,8 @@ function ClerkCallbackContent() {
           throw new Error(callbackErrorMessage);
         }
 
-        const response = await api.post(
-          '/auth/clerk',
+        const response = await axios.post(
+          '/api/auth/clerk',
           {},
           {
             headers: {
