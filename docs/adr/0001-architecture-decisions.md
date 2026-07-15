@@ -1,53 +1,31 @@
 # ADR 0001: Architecture Decisions
 
-Status: accepted
+Status: accepted  
 Date: 2026-07-14
 
 ## Context
 
-The AMPM codebase is a PERN service split into `server`, `worker`, and `client`
-packages with no shared workspace. The maintainability audit flagged several
-deliberate trade-offs and areas of silent drift between the server and worker.
-This record captures the decisions so the state does not drift back.
+The AMPM codebase is split into [client](file:///E:/AMPM/client), [server](file:///E:/AMPM/server), and [worker](file:///E:/AMPM/worker) packages without a shared workspace configuration. This log records key architectural decisions to prevent future state drift.
 
 ## Decisions
 
-### 1. JWT refresh-token rotation + revocation (High security fix)
-Refresh tokens are now **rotated on every use** and made **revocable** via a
-`token_version` column on `User`. A refresh token embeds the version it was
-issued under; `/refresh` rejects any token whose version no longer matches the
-user's current version (e.g. after `/logout`). The server also **fails fast at
-startup** if `JWT_SECRET` / `JWT_REFRESH_SECRET` are unset, and `docker-compose.yml`
-no longer ships guessable default secrets.
+### 1. JWT Refresh Token Rotation & Revocation
+- **Implementation**: Refresh tokens rotate on every use. Revocation is handled via a `token_version` column on the [User](file:///E:/AMPM/server/prisma/schema.prisma) model.
+- **Validation**: Incoming requests to `/api/auth/refresh` verify if the token's embedded version matches the database version. On logout, the database `token_version` is incremented, instantly invalidating all existing refresh tokens.
+- **Security**: The server fails fast at startup if security secrets (`JWT_SECRET` / `JWT_REFRESH_SECRET`) are missing.
 
-Rationale: a long-lived refresh token in `localStorage` with no server-side
-state is replayable after an XSS compromise. Rotation + versioned revocation
-closes that gap without a separate token store.
+### 2. Derived Job Status Precedence
+- **Rule**: [deriveJobStatus](file:///E:/AMPM/server/src/constants.ts) prioritizes active states. It returns `processing` if any child image is `PENDING` or `PROCESSING`, even if another image has already failed.
+- **Safety**: A defensive fallback returning `completed` is placed at the end of the status evaluation block.
 
-### 2. Derived job status precedence (Medium correctness fix)
-`deriveJobStatus` returns `processing` whenever any image is `PENDING`/`PROCESSING`,
-even if another image has `FAILED`. The spec is self-contradictory for mixed
-sets; the chosen precedence (in-flight images win over a sibling failure) is
-now documented in the function's doc comment and asserted by tests. The
-formerly-unreachable trailing `return "completed"` is retained only as a
-defensive fallback with an explanatory comment.
+### 3. Non-Retryable Failure Handling
+- **Rule**: Non-retryable errors (`INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`) do not undergo queue retries.
+- **Implementation**: The worker invokes `job.discard()` immediately, saving API credit quota.
 
-### 3. Non-retryable failures must not be re-run (High fix)
-The worker now calls `job.discard()` for `NON_RETRYABLE_FAILURE_REASONS`
-(`INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`) so BullMQ does not burn
-AI-provider quota re-running inputs that can never succeed.
+### 4. Atomic Job & Image Creation
+- **Rule**: Database entries and queue operations must remain synchronized.
+- **Implementation**: Job and image metadata are written in a single Prisma transaction. If queueing the task in Redis fails, the transaction is rolled back, deleting the job and preventing orphaned database records.
 
-### 4. Job creation atomicity + enqueue safety (Medium fix)
-`Job` + `Image` rows are written in a single Prisma transaction; if the
-subsequent Redis enqueue fails, the DB writes are rolled back (job deleted,
-cascading to images) so no orphaned `PENDING` images are left without a consumer.
-
-### 5. Deferred: extract a shared `@ampm/shared` package (Medium)
-Constants (`ALLOWED_MIME_TYPES`, `MAX_FILE_SIZE_*`), the `ImageJobData` type, and
-the queue name are currently duplicated across `server` and `worker`. The
-`MAX_FILE_SIZE_MB` env var now actually drives the limit in both, and the worker
-validates the job payload shape at runtime (a renamed field fails loudly instead
-of becoming `undefined`). A full shared package is deferred because it requires
-introducing a workspace/build boundary across the three packages; until then the
-worker `QUEUE_NAME` carries a comment pointing at `server/src/queue.ts`'s
-`IMAGE_QUEUE_NAME` as the canonical value.
+### 5. Deferred Code Sharing Refactor
+- **Status**: Deferred extracting a shared package (e.g. `@ampm/shared`).
+- **Workaround**: Types like [ImageJobData](file:///E:/AMPM/worker/src/process-image.ts) and constants like [ALLOWED_MIME_TYPES](file:///E:/AMPM/server/src/constants.ts) remain duplicated. We ensure alignment through strict runtime schema validation in the worker, and cross-reference the canonical queue name in [server/src/queue.ts](file:///E:/AMPM/server/src/queue.ts).
