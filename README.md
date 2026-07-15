@@ -35,8 +35,7 @@ graph TD
 
 - **Database & ORM**: PostgreSQL with Prisma. Mapped relations for [Users](file:///E:/AMPM/server/prisma/schema.prisma), [Jobs](file:///E:/AMPM/server/prisma/schema.prisma), [Images](file:///E:/AMPM/server/prisma/schema.prisma), and [Notifications](file:///E:/AMPM/server/prisma/schema.prisma).
 - **Asynchronous Queue**: BullMQ + Redis for concurrency control, automatic backoff, and retries.
-- **Authentication**: Dual support for email/password and Clerk Google OAuth.
-  - Exchanges Clerk sessions for custom AMPM JWTs (Access & Refresh tokens).
+- **Authentication**: Email/password accounts with custom AMPM JWTs (Access & Refresh tokens).
   - Refresh tokens are rotated on every use and validated against a database `token_version` for instant revocation on logout.
 - **API Documentation**: Auto-generated Swagger UI served at `/api-docs`.
 
@@ -55,7 +54,6 @@ graph TD
 2. Configure external services in [.env](file:///E:/AMPM/.env.example):
    - **Hugging Face**: Create a read token at [Hugging Face Settings](https://huggingface.co/settings/tokens) (`HUGGINGFACE_API_TOKEN`).
    - **Google Cloud Vision**: Enable the API on Google Cloud Console, generate an API key, and set `GOOGLE_CLOUD_VISION_API_KEY`.
-   - **Clerk Google Sign-in**: Set `CLERK_SECRET_KEY` and `VITE_CLERK_PUBLISHABLE_KEY`. Set `http://localhost:5173/sso-callback` as a redirect URL in your Clerk dashboard.
 
 3. Run database migrations:
    ```bash
@@ -78,7 +76,6 @@ docker-compose up --build
 |---|---|---|---|
 | `POST` | `/api/auth/signup` | No | Registers a new account |
 | `POST` | `/api/auth/login` | No | Authenticates credentials and returns JWTs |
-| `POST` | `/api/auth/clerk` | No | Exchanges verified Clerk session for AMPM JWTs |
 | `POST` | `/api/auth/refresh` | No | Rotates access/refresh token pair |
 | `POST` | `/api/auth/logout` | Yes | Revokes refresh tokens globally |
 | `GET`  | `/api/auth/me` | Yes | Returns authenticated user details |

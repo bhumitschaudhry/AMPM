@@ -94,14 +94,6 @@ Open your newly created `.env` file and configure the variables following the gu
     3. Choose role **Read** and name it `ampm-deployment`.
     4. Copy the resulting token.
 
-#### Clerk Integration (Used for production client/server authentication)
-- **`CLERK_SECRET_KEY`**:
-  - **Purpose**: Server-side secret key to verify Clerk JWTs in [server/src/auth/clerk-auth.ts](file:///E:/AMPM/server/src/auth/clerk-auth.ts).
-  - **How to Get**: Create an application on the [Clerk Dashboard](https://dashboard.clerk.com). Go to **API Keys** and copy the **Secret Key** (starts with `sk_`).
-- **`VITE_CLERK_PUBLISHABLE_KEY`**:
-  - **Purpose**: Client-side public key to initialize Clerk.
-  - **How to Get**: Copy the **Publishable Key** (starts with `pk_`) from the Clerk API Keys screen.
-
 #### Cloudflare R2 Storage
 - **`R2_ACCOUNT_ID`**:
   - **Purpose**: Your Cloudflare R2 account identifier.
@@ -171,7 +163,6 @@ fly secrets set --app ampm-api `
   REDIS_URL="<upstash-rediss-url>" `
   JWT_SECRET="<your-generated-jwt-secret>" `
   JWT_REFRESH_SECRET="<your-generated-jwt-refresh-secret>" `
-  CLERK_SECRET_KEY="<clerk-secret-key>" `
   GOOGLE_CLOUD_VISION_API_KEY="<google-vision-api-key>" `
   HUGGINGFACE_API_TOKEN="<huggingface-token>" `
   R2_ACCOUNT_ID="<cloudflare-account-id>" `
@@ -185,7 +176,7 @@ fly secrets set --app ampm-api `
 ```
 
 #### B. Set secrets for the Background Worker (`ampm-worker`):
-The worker requires database, Redis, storage, and AI engine keys, but does not need JWT or Clerk secrets (as authentication is handled at the gateway):
+The worker requires database, Redis, storage, and AI engine keys, but does not need JWT secrets (as authentication is handled at the gateway):
 ```powershell
 fly secrets set --app ampm-worker `
   DATABASE_URL="<neon-pooled-url>" `
@@ -230,19 +221,7 @@ Execute deployment commands from the project root:
 
 ---
 
-## 4. Configure Clerk Authentication
-
-1. Go to the [Clerk Dashboard](https://dashboard.clerk.com).
-2. Choose your production application and select **Paths / Redirects**.
-3. Set the Allowed Redirect URI to handle production sign-ins:
-   ```text
-   https://<your-pages-project>.pages.dev/sso-callback
-   ```
-4. Verify you have transferred your production API Keys (`CLERK_SECRET_KEY` and `VITE_CLERK_PUBLISHABLE_KEY`) to their respective Fly.io and Cloudflare settings.
-
----
-
-## 5. Client Deployment (Cloudflare Pages)
+## 4. Client Deployment (Cloudflare Pages)
 
 1. Sign in to your Cloudflare Dashboard and navigate to **Workers & Pages**.
 2. Click **Create application** -> **Pages** -> **Connect to Git**.
@@ -254,7 +233,6 @@ Execute deployment commands from the project root:
    - **Build command**: `npm run build`
    - **Build output directory**: `dist`
 4. Add the following **Environment Variables** in the Pages project setup (under Settings -> Variables after creating the project, or during initialization):
-   - `VITE_CLERK_PUBLISHABLE_KEY`: `<your-clerk-publishable-key>`
    - `VITE_API_URL`: `https://ampm-api.fly.dev/api` (use your actual Fly API application URL).
 5. Click **Save and Deploy**.
 6. **Post-Deployment Alignment**: Once Cloudflare allocates your Pages URL (e.g., `https://ampm-production.pages.dev`), update your API Server's `CLIENT_URL` secret on Fly.io to enforce correct CORS restrictions:
@@ -264,7 +242,7 @@ Execute deployment commands from the project root:
 
 ---
 
-## 6. End-to-End Verification
+## 5. End-to-End Verification
 
 Follow these verification checks to ensure the stack is healthy:
 
@@ -273,9 +251,9 @@ Follow these verification checks to ensure the stack is healthy:
    `https://<ampm-api>.fly.dev/api/health`
    Verify it returns: `{"status": "ok"}`
 2. **Access Client Interface**:
-   Go to `https://<pages-project>.pages.dev/` and verify the Clerk authentication interface loads correctly.
+   Go to `https://<pages-project>.pages.dev/` and verify the email/password authentication interface loads correctly.
 3. **Register/Login**:
-   Complete the sign-in flow and authenticate.
+   Create an account and authenticate with email and password.
 4. **Media Upload Test**:
    Upload a supported image (under 5MB).
 5. **Verify Database and Storage write**:

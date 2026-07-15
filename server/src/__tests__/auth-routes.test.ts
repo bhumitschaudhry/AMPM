@@ -32,8 +32,7 @@ describe("authRouter", () => {
     const methods = stack.map((layer: any) => layer.route?.path).filter(Boolean);
     expect(methods).toContain("/signup");
     expect(methods).toContain("/login");
-    // CLERK DISABLED — uncomment to re-enable the /clerk route assertion:
-    // expect(methods).toContain("/clerk");
+    expect(methods).not.toContain("/clerk");
     expect(methods).toContain("/refresh");
     expect(methods).toContain("/me");
   });

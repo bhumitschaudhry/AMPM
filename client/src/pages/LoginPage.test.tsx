@@ -52,6 +52,18 @@ describe('LoginPage', () => {
     expect(screen.getByRole('link', { name: /create/i })).toBeInTheDocument();
   });
 
+  it('does not render an OAuth sign-in action when Clerk is configured', () => {
+    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_disabled');
+
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('button', { name: /google|oauth/i })).not.toBeInTheDocument();
+  });
+
   // CLERK DISABLED — Google SSO tests preserved in comments:
   // it('renders Google sign-in alongside the password form', () => {
   //   vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');

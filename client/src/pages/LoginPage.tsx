@@ -135,7 +135,8 @@ export default function LoginPage() {
   );
 }
 
-// CLERK DISABLED — original Clerk-aware components preserved below for easy re-enablement:
+// CLERK DISABLED — historical Clerk implementation preserved below for reference.
+// Re-enabling it also requires restoring the prior shared card props and component.
 //
 // type LoginCardPropsWithGoogle = LoginCardProps & {
 //   isGoogleLoading: boolean;
