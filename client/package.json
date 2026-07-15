@@ -12,10 +12,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@clerk/react": "^6.12.3",
+    "axios": "^1.7.9",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "^7.6.0",
-    "axios": "^1.7.9"
+    "react-router-dom": "^7.6.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
