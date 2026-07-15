@@ -1,7 +1,7 @@
 import { Job } from 'bullmq';
 import sharp from 'sharp';
-import { readFile } from 'fs/promises';
 import prisma from './db';
+import { downloadFromR2 } from './storage/r2-client';
 import { generateCaption } from './pipeline/generate-caption';
 import { detectLabels } from './pipeline/detect-labels';
 import { checkContentSafety } from './pipeline/check-content-safety';
@@ -113,9 +113,9 @@ function validateImageRecord(image: { mimeType: string; fileSize: number }) {
   }
 }
 
-/** Read file from disk and normalize through sharp to validate it's a real image. */
-async function readAndValidateImage(storedPath: string): Promise<Buffer> {
-  const rawBuffer = await readFile(storedPath);
+/** Download image from R2 and normalize through sharp to validate it's a real image. */
+async function readAndValidateImage(r2Key: string): Promise<Buffer> {
+  const rawBuffer = await downloadFromR2(r2Key);
   return sharp(rawBuffer).toBuffer();
 }
 

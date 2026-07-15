@@ -1,0 +1,2542 @@
+# Review package: origin/main..f20148b
+
+## Commits
+f20148b docs: document Clerk Google OAuth setup
+9bf7bd0 fix: isolate Clerk bootstrap exchange
+3c93c05 feat: add Clerk Google sign-in flow
+b5f151e test: cover Clerk identity fallback paths
+2bf7899 feat: exchange Clerk sessions for AMPM tokens
+1e4c311 fix: guard nullable password hash in login
+8b88a8d feat: store Clerk identities on users
+2144ed5 fix: restore swagger-jsdoc lockfile entries
+f59c8ef build: add Clerk OAuth dependencies
+8c4cdba docs: plan Clerk Google OAuth implementation
+cafed2d docs: design Clerk Google OAuth bridge
+
+## Files changed
+ .env.example                                       |   4 +
+ .superpowers/sdd/task-2-report.md                  | 196 +++++++++++
+ README.md                                          |  18 +-
+ client/Dockerfile                                  |   2 +
+ client/package-lock.json                           |  75 ++++-
+ client/package.json                                |   5 +-
+ client/src/App.tsx                                 |   2 +
+ client/src/main.tsx                                |  19 +-
+ client/src/pages/ClerkCallbackPage.test.tsx        |  89 +++++
+ client/src/pages/ClerkCallbackPage.tsx             |  85 +++++
+ client/src/pages/LoginPage.test.tsx                |  87 ++++-
+ client/src/pages/LoginPage.tsx                     | 183 +++++++++--
+ docker-compose.yml                                 |   3 +
+ .../plans/2026-07-15-clerk-google-oauth.md         | 359 +++++++++++++++++++++
+ .../specs/2026-07-15-clerk-google-oauth-design.md  |  93 ++++++
+ server/package-lock.json                           |  90 ++++++
+ server/package.json                                |   1 +
+ .../migration.sql                                  |   3 +
+ server/prisma/schema.prisma                        |   3 +-
+ server/src/__tests__/auth-flow.test.ts             | 258 ++++++++++++++-
+ server/src/__tests__/auth-routes.test.ts           |  17 +-
+ server/src/auth/clerk-auth.ts                      |  49 +++
+ server/src/routes/auth-routes.ts                   |  47 +++
+ 23 files changed, 1632 insertions(+), 56 deletions(-)
+
+## Diff
+diff --git a/.env.example b/.env.example
+index d865eb0..c807c32 100644
+--- a/.env.example
++++ b/.env.example
+@@ -13,20 +13,24 @@ JWT_REFRESH_SECRET=
+ JWT_EXPIRES_IN=15m
+ JWT_REFRESH_EXPIRES_IN=7d
+ 
+ # AI API Keys
+ # Get from: https://console.cloud.google.com/apis/credentials
+ GOOGLE_CLOUD_VISION_API_KEY=your-google-cloud-vision-api-key
+ 
+ # Get from: https://huggingface.co/settings/tokens
+ HUGGINGFACE_API_TOKEN=your-huggingface-api-token
+ 
++# Clerk Google OAuth
++CLERK_SECRET_KEY=
++VITE_CLERK_PUBLISHABLE_KEY=
++
+ # File Upload
+ UPLOAD_DIR=./uploads
+ MAX_FILE_SIZE_MB=5
+ 
+ # Worker
+ MAX_RETRIES=3
+ RETRY_DELAY_MS=5000
+ 
+ # Server
+ PORT=3001
+diff --git a/.superpowers/sdd/task-2-report.md b/.superpowers/sdd/task-2-report.md
+new file mode 100644
+index 0000000..fc4a9b5
+--- /dev/null
++++ b/.superpowers/sdd/task-2-report.md
+@@ -0,0 +1,196 @@
++# Task 2 Report — Clerk Google OAuth plan
++
++Date: 2026-07-15
++Branch: `main`
++Commit: `8b88a8d` — `feat: store Clerk identities on users`
++
++## Scope owned
++
++- Updated `server/prisma/schema.prisma`
++- Added `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql`
++- Did not modify auth runtime code
++- Preserved unrelated working tree changes and prior Task 1 work
++
++## Files changed
++
++- `server/prisma/schema.prisma`
++- `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql`
++
++## Implementation summary
++
++Updated the Prisma `User` model exactly per brief:
++
++- `passwordHash` changed from required to nullable and kept mapped to `password_hash`
++- `clerkUserId` added as nullable unique field mapped to `clerk_user_id`
++
++Created the exact migration SQL from the brief:
++
++```sql
++ALTER TABLE "users" ALTER COLUMN "password_hash" DROP NOT NULL;
++ALTER TABLE "users" ADD COLUMN "clerk_user_id" TEXT;
++CREATE UNIQUE INDEX "users_clerk_user_id_key" ON "users"("clerk_user_id");
++```
++
++This is data-preserving and does not recreate or drop the `users` table.
++
++## Commands run
++
++### Read task brief
++
++```powershell
++Get-Content -Raw '.superpowers\sdd\task-2-brief.md'
++```
++
++### Inspect current state
++
++```powershell
++git status --short
++Get-Content -Raw 'server\prisma\schema.prisma'
++Get-Content -Raw 'server\package.json'
++git log --oneline --decorate -n 10 -- server/prisma/schema.prisma server/prisma/migrations
++```
++
++### Verification commands from the brief
++
++Run from `server`:
++
++```powershell
++npx prisma migrate deploy
++```
++
++Output:
++
++```text
++Prisma schema loaded from prisma\schema.prisma
++Error: Prisma schema validation - (get-config wasm)
++Error code: P1012
++error: Environment variable not found: DATABASE_URL.
++  -->  prisma\schema.prisma:7
++   |
++ 6 |   provider = "postgresql"
++ 7 |   url      = env("DATABASE_URL")
++   |
++
++Validation Error Count: 1
++[Context: getConfig]
++
++Prisma CLI Version : 6.19.3
++```
++
++Result: could not deploy migration because no live database connection string was available in the environment.
++
++```powershell
++npx prisma generate
++```
++
++Output:
++
++```text
++Prisma schema loaded from prisma\schema.prisma
++
++✔ Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 237ms
++```
++
++Result: passed.
++
++```powershell
++npm run typecheck
++```
++
++Output:
++
++```text
++> ampm-server@1.0.0 typecheck
++> tsc --noEmit
++```
++
++Result: passed with exit code 0.
++
++### Commit
++
++```powershell
++git add server/prisma/schema.prisma server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
++git commit -m "feat: store Clerk identities on users"
++```
++
++Output:
++
++```text
++[main 8b88a8d] feat: store Clerk identities on users
++ 2 files changed, 5 insertions(+), 1 deletion(-)
++ create mode 100644 server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
++```
++
++## Verification summary
++
++- Prisma migration SQL file matches the brief exactly
++- Prisma client generation succeeded
++- Server typecheck succeeded
++- Live migration deployment could not be executed because `DATABASE_URL` was missing
++
++## TDD evidence
++
++This task was a schema-plus-migration change, not an auth runtime behavior change. I did not add tests because the brief explicitly scoped ownership to the Prisma `User` schema and exact migration only. Instead, verification was done through:
++
++- exact migration SQL creation
++- `npx prisma generate`
++- `npm run typecheck`
++
++No auth runtime code was changed.
++
++## Self-review
++
++- Scope check: only the requested Prisma schema and migration files were changed
++- Data safety check: migration makes `password_hash` nullable and adds nullable `clerk_user_id`; it does not drop or recreate `users`
++- Mapping check: existing email uniqueness, token fields, relations, and table/column mappings remained unchanged
++- Boundary check: no auth route, middleware, Clerk runtime, or other application code was modified
++
++## Concerns / limitations
++
++1. `npx prisma migrate deploy` could not run because `DATABASE_URL` was not set in the current environment.
++2. Git reported CRLF warnings for the touched Prisma files; no functional content issue was introduced, but line endings may be normalized by the user's git settings later.
++3. The repository already had unrelated dirty/untracked changes before this task. They were intentionally left untouched.
++
++---
++
++## Task 2 review fix — nullable passwordHash login guard
++
++Date: 2026-07-15
++
++### Changed files for this fix
++
++- `server/src/routes/auth-routes.ts`
++- `server/src/__tests__/auth-flow.test.ts`
++
++### Regression test evidence
++
++Observed failure before the fix:
++
++```text
++❯ src/__tests__/auth-flow.test.ts (3 tests | 1 failed)
++× login > returns the generic auth error for OAuth-only users without a password hash
++  → expected 500 to be 401 // Object.is equality
++```
++
++Passed after the fix:
++
++```text
++npm test -- --run src/__tests__/auth-flow.test.ts src/__tests__/auth-routes.test.ts
++
++Test Files  2 passed (2)
++Tests       13 passed (13)
++```
++
++Typecheck evidence:
++
++```text
++npm run typecheck
++
++> ampm-server@1.0.0 typecheck
++> tsc --noEmit
++```
++
++### Notes
++
++- Added the smallest safe null guard in `POST /login` so OAuth-only users now receive the existing generic `Invalid email or password.` response.
++- Kept the Clerk route out of scope, as requested.
+diff --git a/README.md b/README.md
+index e6f4a21..86d0dab 100644
+--- a/README.md
++++ b/README.md
+@@ -47,39 +47,54 @@ AMPM is an asynchronous media processing service built with the PERN (PostgreSQL
+ 5. **UI Updates**: The client dashboard and detail views dynamically poll (every 3-5 seconds) to reflect status changes (`pending` -> `processing` -> `completed` / `failed`).
+ 6. **Retry Mechanism**: Failed image processing tasks can be retried individually directly from the detail view.
+ 
+ ---
+ 
+ ## Tech Stack and Key Decisions
+ 
+ - **Database**: PostgreSQL (relational structure captures Job -> Images and User -> Notifications mappings).
+ - **ORM**: Prisma (provides type-safe schema, migrations, and relationships).
+ - **Job Queue**: BullMQ + Redis (provides concurrency limits, automated retries, rate limiting, and failure tracking).
+-- **Authentication**: JWT (Access + Refresh tokens). Refresh tokens are **rotated on every use** and are **revocable**: each user carries a `token_version` (in the DB); a refresh token embeds the version it was issued under, and `/refresh` rejects any token whose version no longer matches (e.g. after `/logout`). Secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are required at startup — the server refuses to boot without them.
++- **Authentication**: Email/password authentication and optional Google sign-in through Clerk both exchange into AMPM JWT access and refresh tokens. Refresh tokens are **rotated on every use** and are **revocable**: each user carries a `token_version` (in the DB); a refresh token embeds the version it was issued under, and `/refresh` rejects any token whose version no longer matches (e.g. after `/logout`). Secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are required at startup — the server refuses to boot without them.
+ - **Frontend Styling**: Vanilla CSS with a customized premium dark theme system (utilizing variables, transitions, and responsive grid layouts).
+ - **API Spec**: Served dynamically via Swagger UI at `/api-docs`.
+ - **CI/CD**: GitHub Actions runs each service's tests and production build on pushes and pull requests. Deployment is intentionally left to the target environment because no cloud credentials or target platform are included in this repository.
+ 
+ ---
+ 
+ ## How to Run Locally
+ 
+ ### Prerequisites
+ - Docker and Docker Compose installed.
+ - **or** Node.js v20+, Redis, and PostgreSQL running locally.
+ 
+ ### Environment Setup
+ Copy `.env.example` to `.env` in the root:
+ ```bash
+ cp .env.example .env
+ ```
+ 
++#### Clerk Google sign-in
++
++Google sign-in is optional. To enable it locally:
++
++1. Create a Clerk application and enable Google under **User & authentication -> Social connections**.
++2. Set `CLERK_SECRET_KEY` for the API server and `VITE_CLERK_PUBLISHABLE_KEY` for the client in `.env`.
++3. Register `http://localhost:5173/sso-callback` as a Clerk redirect URL.
++4. Apply the database migrations before starting the server:
++
++```bash
++docker-compose run --rm server npx prisma migrate deploy
++```
++
++The client completes Google sign-in with Clerk, exchanges the verified Clerk session for AMPM JWTs, and then uses the existing AMPM API authentication. Google accounts are OAuth-only. If a Google email already belongs to a local password account, sign in with email and password; AMPM does not silently link the accounts.
++
+ #### Obtaining API Keys:
+ 1. **Hugging Face API Token**:
+    - Register at [Hugging Face](https://huggingface.co/).
+    - Go to **Settings -> Access Tokens** and create a read token.
+    - Set as `HUGGINGFACE_API_TOKEN`.
+ 2. **Google Cloud Vision API Key**:
+    - Go to the [Google Cloud Console](https://console.cloud.google.com/).
+    - Create a project and enable the **Cloud Vision API**.
+    - Create an API key in **APIs & Services -> Credentials**.
+    - Set as `GOOGLE_CLOUD_VISION_API_KEY`.
+@@ -96,20 +111,21 @@ This spins up the database, Redis queue, API gateway, background worker, and Rea
+ ---
+ 
+ ## API Endpoints
+ 
+ Fully detailed in `/api-docs` Swagger UI:
+ 
+ | Method | Endpoint | Auth | Description |
+ |---|---|---|---|
+ | `POST` | `/api/auth/signup` | No | Creates a user account and returns JWTs |
+ | `POST` | `/api/auth/login` | No | Logs in and returns tokens |
++| `POST` | `/api/auth/clerk` | No | Exchanges a verified Clerk Google session for AMPM JWTs |
+ | `POST` | `/api/auth/refresh` | No | Rotates the refresh token and returns a new access + refresh token pair |
+ | `POST` | `/api/auth/logout` | Yes | Revokes the user's refresh tokens (server-side) |
+ | `GET`  | `/api/auth/me` | Yes | Retrieves current user |
+ | `POST` | `/api/jobs` | Yes | Uploads one or more images (multipart) |
+ | `GET`  | `/api/jobs` | Yes | Lists user's jobs with derived overall status |
+ | `GET`  | `/api/jobs/:jobId` | Yes | Retrieves job detail with all child images and AI data |
+ | `POST` | `/api/jobs/:jobId/images/:imageId/retry` | Yes | Retries processing a failed image |
+ | `GET`  | `/api/notifications` | Yes | Lists user alerts (including flagged image warnings) |
+ | `PATCH`| `/api/notifications/:id/read` | Yes | Marks an alert as read |
+ 
+diff --git a/client/Dockerfile b/client/Dockerfile
+index f7ffd18..42cb697 100644
+--- a/client/Dockerfile
++++ b/client/Dockerfile
+@@ -1,12 +1,14 @@
+ FROM node:20-alpine AS build
+ WORKDIR /app
++ARG VITE_CLERK_PUBLISHABLE_KEY
++ENV VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY
+ COPY package.json package-lock.json* ./
+ RUN npm install
+ COPY . .
+ RUN npm run build
+ 
+ FROM nginx:alpine
+ COPY --from=build /app/dist /usr/share/nginx/html
+ COPY nginx.conf /etc/nginx/conf.d/default.conf
+ EXPOSE 80
+ CMD ["nginx", "-g", "daemon off;"]
+diff --git a/client/package-lock.json b/client/package-lock.json
+index e9465e1..daf3417 100644
+--- a/client/package-lock.json
++++ b/client/package-lock.json
+@@ -1,20 +1,21 @@
+ {
+   "name": "ampm-client",
+   "version": "1.0.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "ampm-client",
+       "version": "1.0.0",
+       "dependencies": {
++        "@clerk/react": "^6.12.3",
+         "axios": "^1.7.9",
+         "react": "^19.1.0",
+         "react-dom": "^19.1.0",
+         "react-router-dom": "^7.6.0"
+       },
+       "devDependencies": {
+         "@testing-library/jest-dom": "^6.6.3",
+         "@testing-library/react": "^16.3.0",
+         "@types/react": "^19.1.0",
+         "@types/react-dom": "^19.1.0",
+@@ -338,20 +339,64 @@
+       "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "@babel/helper-string-parser": "^7.29.7",
+         "@babel/helper-validator-identifier": "^7.29.7"
+       },
+       "engines": {
+         "node": ">=6.9.0"
+       }
+     },
++    "node_modules/@clerk/react": {
++      "version": "6.12.3",
++      "resolved": "https://registry.npmjs.org/@clerk/react/-/react-6.12.3.tgz",
++      "integrity": "sha512-mNTo+m8Y46wd5UmXRfTurHig0MnGx2h4YCNQrFWs2oiB0SgxjUfrrQW85fRE5OVBjnHUih9NvdMNHuj6T7wBng==",
++      "license": "MIT",
++      "dependencies": {
++        "@clerk/shared": "^4.25.3",
++        "tslib": "2.8.1"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "peerDependencies": {
++        "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0",
++        "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0"
++      }
++    },
++    "node_modules/@clerk/shared": {
++      "version": "4.25.3",
++      "resolved": "https://registry.npmjs.org/@clerk/shared/-/shared-4.25.3.tgz",
++      "integrity": "sha512-WJOD9vjmCG2k5ynlpYesEXRtBgrJOvON5UV2T6NuCsVTu0dGjHSrnEo5LhUNAAYiKiwd4Mww1EXDRL9ULFkxZw==",
++      "license": "MIT",
++      "dependencies": {
++        "@tanstack/query-core": "^5.100.6",
++        "dequal": "2.0.3",
++        "glob-to-regexp": "0.4.1",
++        "js-cookie": "3.0.7"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "peerDependencies": {
++        "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0",
++        "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0"
++      },
++      "peerDependenciesMeta": {
++        "react": {
++          "optional": true
++        },
++        "react-dom": {
++          "optional": true
++        }
++      }
++    },
+     "node_modules/@csstools/color-helpers": {
+       "version": "5.1.0",
+       "resolved": "https://registry.npmjs.org/@csstools/color-helpers/-/color-helpers-5.1.0.tgz",
+       "integrity": "sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==",
+       "dev": true,
+       "funding": [
+         {
+           "type": "github",
+           "url": "https://github.com/sponsors/csstools"
+         },
+@@ -1679,20 +1724,30 @@
+       "cpu": [
+         "x64"
+       ],
+       "dev": true,
+       "license": "MIT",
+       "optional": true,
+       "os": [
+         "win32"
+       ]
+     },
++    "node_modules/@tanstack/query-core": {
++      "version": "5.101.2",
++      "resolved": "https://registry.npmjs.org/@tanstack/query-core/-/query-core-5.101.2.tgz",
++      "integrity": "sha512-hH5MLoJhF7KaIGd7q3xTXGXvslI+GYlM1Z/35aSHHWaCJWB7XvTSHYuV3eM7tw+aE0mT/xMro4M4Q9rCGHT0lw==",
++      "license": "MIT",
++      "funding": {
++        "type": "github",
++        "url": "https://github.com/sponsors/tannerlinsley"
++      }
++    },
+     "node_modules/@testing-library/dom": {
+       "version": "10.4.1",
+       "resolved": "https://registry.npmjs.org/@testing-library/dom/-/dom-10.4.1.tgz",
+       "integrity": "sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==",
+       "dev": true,
+       "license": "MIT",
+       "peer": true,
+       "dependencies": {
+         "@babel/code-frame": "^7.10.4",
+         "@babel/runtime": "^7.12.5",
+@@ -2287,21 +2342,20 @@
+       "integrity": "sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==",
+       "license": "MIT",
+       "engines": {
+         "node": ">=0.4.0"
+       }
+     },
+     "node_modules/dequal": {
+       "version": "2.0.3",
+       "resolved": "https://registry.npmjs.org/dequal/-/dequal-2.0.3.tgz",
+       "integrity": "sha512-0je+qPKHEMohvfRTCEo3CrPG6cAzAYgmzKyxRiYSSDkS6eGJdyVJm7WaYA5ECaAD9wLB2T4EEeymA5aFVcYXCA==",
+-      "dev": true,
+       "license": "MIT",
+       "engines": {
+         "node": ">=6"
+       }
+     },
+     "node_modules/detect-libc": {
+       "version": "2.1.2",
+       "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
+       "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
+       "dev": true,
+@@ -2594,20 +2648,26 @@
+       "integrity": "sha512-sTSfBjoXBp89JvIKIefqw7U2CCebsc74kiY6awiGogKtoSGbgjYE/G/+l9sF3MWFPNc9IcoOC4ODfKHfxFmp0g==",
+       "license": "MIT",
+       "dependencies": {
+         "dunder-proto": "^1.0.1",
+         "es-object-atoms": "^1.0.0"
+       },
+       "engines": {
+         "node": ">= 0.4"
+       }
+     },
++    "node_modules/glob-to-regexp": {
++      "version": "0.4.1",
++      "resolved": "https://registry.npmjs.org/glob-to-regexp/-/glob-to-regexp-0.4.1.tgz",
++      "integrity": "sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==",
++      "license": "BSD-2-Clause"
++    },
+     "node_modules/gopd": {
+       "version": "1.2.0",
+       "resolved": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
+       "integrity": "sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==",
+       "license": "MIT",
+       "engines": {
+         "node": ">= 0.4"
+       },
+       "funding": {
+         "url": "https://github.com/sponsors/ljharb"
+@@ -2725,20 +2785,29 @@
+         "node": ">=8"
+       }
+     },
+     "node_modules/is-potential-custom-element-name": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/is-potential-custom-element-name/-/is-potential-custom-element-name-1.0.1.tgz",
+       "integrity": "sha512-bCYeRA2rVibKZd+s2625gGnGF/t7DSqDs4dP7CrLA1m7jKWz6pps0LpYLJN8Q64HtmPKJ1hrN3nzPNKFEKOUiQ==",
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/js-cookie": {
++      "version": "3.0.7",
++      "resolved": "https://registry.npmjs.org/js-cookie/-/js-cookie-3.0.7.tgz",
++      "integrity": "sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=20"
++      }
++    },
+     "node_modules/js-tokens": {
+       "version": "4.0.0",
+       "resolved": "https://registry.npmjs.org/js-tokens/-/js-tokens-4.0.0.tgz",
+       "integrity": "sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==",
+       "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/jsdom": {
+       "version": "26.1.0",
+       "resolved": "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz",
+@@ -3737,23 +3806,21 @@
+         "punycode": "^2.3.1"
+       },
+       "engines": {
+         "node": ">=18"
+       }
+     },
+     "node_modules/tslib": {
+       "version": "2.8.1",
+       "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
+       "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+-      "dev": true,
+-      "license": "0BSD",
+-      "optional": true
++      "license": "0BSD"
+     },
+     "node_modules/typescript": {
+       "version": "6.0.3",
+       "resolved": "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+       "integrity": "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==",
+       "dev": true,
+       "license": "Apache-2.0",
+       "bin": {
+         "tsc": "bin/tsc",
+         "tsserver": "bin/tsserver"
+diff --git a/client/package.json b/client/package.json
+index 7435b4b..b338ed1 100644
+--- a/client/package.json
++++ b/client/package.json
+@@ -5,24 +5,25 @@
+   "type": "module",
+   "scripts": {
+     "dev": "vite",
+     "build": "tsc && vite build",
+     "preview": "vite preview",
+     "test": "vitest run",
+     "test:watch": "vitest",
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
++    "@clerk/react": "^6.12.3",
++    "axios": "^1.7.9",
+     "react": "^19.1.0",
+     "react-dom": "^19.1.0",
+-    "react-router-dom": "^7.6.0",
+-    "axios": "^1.7.9"
++    "react-router-dom": "^7.6.0"
+   },
+   "devDependencies": {
+     "@testing-library/jest-dom": "^6.6.3",
+     "@testing-library/react": "^16.3.0",
+     "@types/react": "^19.1.0",
+     "@types/react-dom": "^19.1.0",
+     "@vitejs/plugin-react": "^5.0.0",
+     "jsdom": "^26.0.0",
+     "typescript": "~6.0.2",
+     "vite": "^8.1.1",
+diff --git a/client/src/App.tsx b/client/src/App.tsx
+index 0300998..be0aef7 100644
+--- a/client/src/App.tsx
++++ b/client/src/App.tsx
+@@ -1,30 +1,32 @@
+ import { Routes, Route, Navigate } from 'react-router-dom';
+ import LoginPage from './pages/LoginPage';
+ import SignupPage from './pages/SignupPage';
+ import Dashboard from './pages/Dashboard';
+ import JobDetailPage from './pages/JobDetailPage';
++import ClerkCallbackPage from './pages/ClerkCallbackPage';
+ 
+ /** Wrapper to protect routes requiring authentication. */
+ function ProtectedRoute({ children }: { children: React.ReactNode }) {
+   const token = localStorage.getItem('ampm_access_token');
+   if (!token) {
+     return <Navigate to="/login" replace />;
+   }
+   return <>{children}</>;
+ }
+ 
+ export default function App() {
+   return (
+     <Routes>
+       <Route path="/login" element={<LoginPage />} />
+       <Route path="/signup" element={<SignupPage />} />
++      <Route path="/sso-callback" element={<ClerkCallbackPage />} />
+       <Route
+         path="/"
+         element={
+           <ProtectedRoute>
+             <Dashboard />
+           </ProtectedRoute>
+         }
+       />
+       <Route
+         path="/jobs/:jobId"
+diff --git a/client/src/main.tsx b/client/src/main.tsx
+index 9576dda..e52518d 100644
+--- a/client/src/main.tsx
++++ b/client/src/main.tsx
+@@ -1,13 +1,26 @@
+ import { StrictMode } from 'react';
+ import { createRoot } from 'react-dom/client';
+ import { BrowserRouter } from 'react-router-dom';
++import { ClerkProvider } from '@clerk/react';
+ import App from './App';
+ import './index.css';
+ 
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
++
++const app = (
++  <BrowserRouter>
++    <App />
++  </BrowserRouter>
++);
++
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+-    <BrowserRouter>
+-      <App />
+-    </BrowserRouter>
++    {getClerkPublishableKey() ? (
++      <ClerkProvider publishableKey={getClerkPublishableKey()}>{app}</ClerkProvider>
++    ) : (
++      app
++    )}
+   </StrictMode>
+ );
+diff --git a/client/src/pages/ClerkCallbackPage.test.tsx b/client/src/pages/ClerkCallbackPage.test.tsx
+new file mode 100644
+index 0000000..05c84af
+--- /dev/null
++++ b/client/src/pages/ClerkCallbackPage.test.tsx
+@@ -0,0 +1,89 @@
++import { render, screen, waitFor } from '@testing-library/react';
++import { MemoryRouter } from 'react-router-dom';
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import ClerkCallbackPage from './ClerkCallbackPage';
++const navigateMock = vi.hoisted(() => vi.fn());
++const useAuthMock = vi.hoisted(() => vi.fn());
++const postMock = vi.hoisted(() => vi.fn());
++
++vi.mock('axios', () => ({
++  default: {
++    post: postMock,
++  },
++}));
++
++vi.mock('react-router-dom', async () => {
++  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
++  return {
++    ...actual,
++    useNavigate: () => navigateMock,
++  };
++});
++
++vi.mock('@clerk/react', () => ({
++  AuthenticateWithRedirectCallback: () => <div data-testid="clerk-redirect-callback" />,
++  useAuth: () => useAuthMock(),
++}));
++
++describe('ClerkCallbackPage', () => {
++  beforeEach(() => {
++    localStorage.clear();
++    vi.clearAllMocks();
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++  });
++
++  it('exchanges the Clerk token and stores AMPM tokens after callback completion', async () => {
++    useAuthMock.mockReturnValue({
++      isLoaded: true,
++      isSignedIn: true,
++      getToken: vi.fn().mockResolvedValue('clerk-session'),
++    });
++    postMock.mockResolvedValueOnce({
++      data: {
++        accessToken: 'ampm-access',
++        refreshToken: 'ampm-refresh',
++      },
++    });
++
++    render(
++      <MemoryRouter>
++        <ClerkCallbackPage />
++      </MemoryRouter>
++    );
++
++    await waitFor(() =>
++      expect(postMock).toHaveBeenCalledWith(
++        '/api/auth/clerk',
++        {},
++        {
++          headers: {
++            Authorization: 'Bearer clerk-session',
++          },
++        }
++      )
++    );
++
++    expect(localStorage.getItem('ampm_access_token')).toBe('ampm-access');
++    expect(localStorage.getItem('ampm_refresh_token')).toBe('ampm-refresh');
++    expect(navigateMock).toHaveBeenCalledWith('/');
++  });
++
++  it('shows the exchange error when callback authentication fails', async () => {
++    useAuthMock.mockReturnValue({
++      isLoaded: true,
++      isSignedIn: true,
++      getToken: vi.fn().mockResolvedValue(null),
++    });
++
++    render(
++      <MemoryRouter>
++        <ClerkCallbackPage />
++      </MemoryRouter>
++    );
++
++    expect(
++      await screen.findByText('Could not complete Google sign-in. Please try again.')
++    ).toBeInTheDocument();
++    expect(navigateMock).not.toHaveBeenCalled();
++  });
++});
+diff --git a/client/src/pages/ClerkCallbackPage.tsx b/client/src/pages/ClerkCallbackPage.tsx
+new file mode 100644
+index 0000000..e7234a2
+--- /dev/null
++++ b/client/src/pages/ClerkCallbackPage.tsx
+@@ -0,0 +1,85 @@
++import { useEffect, useState } from 'react';
++import axios from 'axios';
++import { AuthenticateWithRedirectCallback, useAuth } from '@clerk/react';
++import { Navigate, useNavigate } from 'react-router-dom';
++
++const callbackErrorMessage = 'Could not complete Google sign-in. Please try again.';
++
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
++
++/** Complete the Clerk redirect and exchange the Clerk token for AMPM tokens. */
++function ClerkCallbackContent() {
++  const { isLoaded, isSignedIn, getToken } = useAuth();
++  const navigate = useNavigate();
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    if (!isLoaded || !isSignedIn) {
++      return;
++    }
++
++    let isCancelled = false;
++
++    async function exchangeClerkToken() {
++      try {
++        const clerkToken = await getToken();
++        if (!clerkToken) {
++          throw new Error(callbackErrorMessage);
++        }
++
++        const response = await axios.post(
++          '/api/auth/clerk',
++          {},
++          {
++            headers: {
++              Authorization: `Bearer ${clerkToken}`,
++            },
++          }
++        );
++
++        if (isCancelled) {
++          return;
++        }
++
++        const { accessToken, refreshToken } = response.data;
++        localStorage.setItem('ampm_access_token', accessToken);
++        localStorage.setItem('ampm_refresh_token', refreshToken);
++        navigate('/');
++      } catch (err: any) {
++        if (isCancelled) {
++          return;
++        }
++
++        setError(err.response?.data?.error || err.message || callbackErrorMessage);
++      }
++    }
++
++    void exchangeClerkToken();
++
++    return () => {
++      isCancelled = true;
++    };
++  }, [getToken, isLoaded, isSignedIn, navigate]);
++
++  return (
++    <div className="auth-container">
++      <div className="auth-card">
++        <AuthenticateWithRedirectCallback />
++        <h1 className="brand-title">AMPM</h1>
++        <p className="auth-subtitle">Completing Google sign-in...</p>
++        {error && <div className="error-banner">{error}</div>}
++      </div>
++    </div>
++  );
++}
++
++/** Guard the Clerk callback route when Clerk is not configured in this client. */
++export default function ClerkCallbackPage() {
++  if (!getClerkPublishableKey()) {
++    return <Navigate to="/login" replace />;
++  }
++
++  return <ClerkCallbackContent />;
++}
+diff --git a/client/src/pages/LoginPage.test.tsx b/client/src/pages/LoginPage.test.tsx
+index b458c1d..88e8a26 100644
+--- a/client/src/pages/LoginPage.test.tsx
++++ b/client/src/pages/LoginPage.test.tsx
+@@ -1,32 +1,115 @@
+-import { render, screen } from '@testing-library/react';
++import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+ import { MemoryRouter } from 'react-router-dom';
+-import { describe, it, expect, vi } from 'vitest';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+ import LoginPage from './LoginPage';
+ 
++const startGoogleSso = vi.fn();
++const useSignInMock = vi.fn();
++
+ vi.mock('../api', () => ({
+   default: {
+     post: vi.fn(),
+   },
+ }));
+ 
++vi.mock('@clerk/react', () => ({
++  useSignIn: () => useSignInMock(),
++}));
++
+ describe('LoginPage', () => {
++  beforeEach(() => {
++    localStorage.clear();
++    vi.clearAllMocks();
++    vi.unstubAllEnvs();
++    useSignInMock.mockReturnValue({
++      fetchStatus: 'idle',
++      signIn: {
++        sso: startGoogleSso,
++      },
++    });
++  });
++
++  afterEach(() => {
++    vi.unstubAllEnvs();
++  });
++
+   it('renders the sign-in form', () => {
+     render(
+       <MemoryRouter>
+         <LoginPage />
+       </MemoryRouter>
+     );
+     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+     expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+   });
+ 
+   it('shows a link to signup', () => {
+     render(
+       <MemoryRouter>
+         <LoginPage />
+       </MemoryRouter>
+     );
+     expect(screen.getByRole('link', { name: /create/i })).toBeInTheDocument();
+   });
++
++  it('renders Google sign-in alongside the password form', () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
++    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
++    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
++  });
++
++  it('starts the Clerk Google redirect when the button is clicked', async () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
++
++    await waitFor(() =>
++      expect(startGoogleSso).toHaveBeenCalledWith({
++        strategy: 'oauth_google',
++        redirectUrl: '/sso-callback',
++        redirectCallbackUrl: '/sso-callback',
++      })
++    );
++  });
++
++  it('shows a disabled Google button and helper text when Clerk is not configured', () => {
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    expect(screen.getByRole('button', { name: /continue with google/i })).toBeDisabled();
++    expect(screen.getByText(/google sign-in is unavailable until clerk is configured/i)).toBeInTheDocument();
++  });
++
++  it('shows Clerk redirect errors in the existing banner', async () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++    startGoogleSso.mockRejectedValueOnce(new Error('Google redirect failed.'));
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
++
++    expect(await screen.findByText('Google redirect failed.')).toBeInTheDocument();
++  });
+ });
+diff --git a/client/src/pages/LoginPage.tsx b/client/src/pages/LoginPage.tsx
+index 3cecf75..28d9154 100644
+--- a/client/src/pages/LoginPage.tsx
++++ b/client/src/pages/LoginPage.tsx
+@@ -1,84 +1,199 @@
+ import React, { useState } from 'react';
+ import { useNavigate, Link } from 'react-router-dom';
++import { useSignIn } from '@clerk/react';
+ import api from '../api';
+ 
+-export default function LoginPage() {
+-  const [email, setEmail] = useState('');
+-  const [password, setPassword] = useState('');
+-  const [error, setError] = useState<string | null>(null);
+-  const [isLoading, setIsLoading] = useState(false);
+-  const navigate = useNavigate();
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
+ 
+-  async function handleSubmit(e: React.FormEvent) {
+-    e.preventDefault();
+-    if (!email || !password) {
+-      setError('Please enter both email and password.');
+-      return;
+-    }
++type LoginCardProps = {
++  error: string | null;
++  email: string;
++  password: string;
++  isLoading: boolean;
++  isGoogleLoading: boolean;
++  isGoogleEnabled: boolean;
++  onEmailChange: (value: string) => void;
++  onPasswordChange: (value: string) => void;
++  onSubmit: (event: React.FormEvent) => Promise<void>;
++  onGoogleSignIn: () => Promise<void>;
++};
+ 
+-    setIsLoading(true);
+-    setError(null);
+-
+-    try {
+-      const response = await api.post('/auth/login', { email, password });
+-      const { accessToken, refreshToken } = response.data;
+-      localStorage.setItem('ampm_access_token', accessToken);
+-      localStorage.setItem('ampm_refresh_token', refreshToken);
+-      navigate('/');
+-    } catch (err: any) {
+-      setError(
+-        err.response?.data?.error ||
+-        'Could not log in. Check your credentials and database connection.'
+-      );
+-    } finally {
+-      setIsLoading(false);
+-    }
+-  }
++/** Show the shared login card with local and Google sign-in actions. */
++function LoginCard({
++  error,
++  email,
++  password,
++  isLoading,
++  isGoogleLoading,
++  isGoogleEnabled,
++  onEmailChange,
++  onPasswordChange,
++  onSubmit,
++  onGoogleSignIn,
++}: LoginCardProps) {
++  const isGoogleDisabled = isLoading || isGoogleLoading || !isGoogleEnabled;
+ 
+   return (
+     <div className="auth-container">
+       <div className="auth-card">
+         <h1 className="brand-title">AMPM</h1>
+         <p className="auth-subtitle">Sign in to your media pipeline account</p>
+-        
++
+         {error && <div className="error-banner">{error}</div>}
+ 
+-        <form onSubmit={handleSubmit} className="auth-form">
++        <form onSubmit={onSubmit} className="auth-form">
+           <div className="form-group">
+             <label htmlFor="email">Email Address</label>
+             <input
+               id="email"
+               type="email"
+               value={email}
+-              onChange={(e) => setEmail(e.target.value)}
++              onChange={(event) => onEmailChange(event.target.value)}
+               placeholder="you@example.com"
+               disabled={isLoading}
+               required
+             />
+           </div>
+ 
+           <div className="form-group">
+             <label htmlFor="password">Password</label>
+             <input
+               id="password"
+               type="password"
+               value={password}
+-              onChange={(e) => setPassword(e.target.value)}
++              onChange={(event) => onPasswordChange(event.target.value)}
+               placeholder="••••••••"
+               disabled={isLoading}
+               required
+             />
+           </div>
+ 
+           <button type="submit" className="btn btn-primary" disabled={isLoading}>
+             {isLoading ? 'Signing In...' : 'Sign In'}
+           </button>
+         </form>
+ 
++        <button
++          type="button"
++          className="btn btn-secondary"
++          disabled={isGoogleDisabled}
++          onClick={() => void onGoogleSignIn()}
++        >
++          {isGoogleLoading ? 'Redirecting to Google...' : 'Continue with Google'}
++        </button>
++
++        {!isGoogleEnabled && (
++          <p>Google sign-in is unavailable until Clerk is configured.</p>
++        )}
++
+         <p className="auth-footer">
+           Don't have an account? <Link to="/signup">Create one now</Link>
+         </p>
+       </div>
+     </div>
+   );
+ }
++
++/** Provide the existing email/password login flow when Clerk is disabled. */
++function LocalLoginPage() {
++  return <LoginPageContent isGoogleEnabled={false} onGoogleSignIn={async () => undefined} />;
++}
++
++/** Provide the Google redirect action when Clerk is configured. */
++function ClerkLoginPage() {
++  const { fetchStatus, signIn } = useSignIn();
++
++  async function handleGoogleSignIn() {
++    if (fetchStatus === 'fetching') {
++      return;
++    }
++
++    await signIn.sso({
++      strategy: 'oauth_google',
++      redirectUrl: '/sso-callback',
++      redirectCallbackUrl: '/sso-callback',
++    });
++  }
++
++  return <LoginPageContent isGoogleEnabled={fetchStatus !== 'fetching'} onGoogleSignIn={handleGoogleSignIn} />;
++}
++
++/** Handle the local password login flow and shared error state. */
++function LoginPageContent({
++  isGoogleEnabled,
++  onGoogleSignIn,
++}: {
++  isGoogleEnabled: boolean;
++  onGoogleSignIn: () => Promise<void>;
++}) {
++  const [email, setEmail] = useState('');
++  const [password, setPassword] = useState('');
++  const [error, setError] = useState<string | null>(null);
++  const [isLoading, setIsLoading] = useState(false);
++  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
++  const navigate = useNavigate();
++
++  async function handleSubmit(event: React.FormEvent) {
++    event.preventDefault();
++    if (!email || !password) {
++      setError('Please enter both email and password.');
++      return;
++    }
++
++    setIsLoading(true);
++    setError(null);
++
++    try {
++      const response = await api.post('/auth/login', { email, password });
++      const { accessToken, refreshToken } = response.data;
++      localStorage.setItem('ampm_access_token', accessToken);
++      localStorage.setItem('ampm_refresh_token', refreshToken);
++      navigate('/');
++    } catch (err: any) {
++      setError(
++        err.response?.data?.error ||
++          'Could not log in. Check your credentials and database connection.'
++      );
++    } finally {
++      setIsLoading(false);
++    }
++  }
++
++  async function handleGoogleSignIn() {
++    setIsGoogleLoading(true);
++    setError(null);
++
++    try {
++      await onGoogleSignIn();
++    } catch (err: any) {
++      setError(err.message || 'Could not start Google sign-in. Please try again.');
++      setIsGoogleLoading(false);
++    }
++  }
++
++  return (
++    <LoginCard
++      error={error}
++      email={email}
++      password={password}
++      isLoading={isLoading}
++      isGoogleLoading={isGoogleLoading}
++      isGoogleEnabled={isGoogleEnabled}
++      onEmailChange={setEmail}
++      onPasswordChange={setPassword}
++      onSubmit={handleSubmit}
++      onGoogleSignIn={handleGoogleSignIn}
++    />
++  );
++}
++
++/** Render the right login experience for the current Clerk configuration. */
++export default function LoginPage() {
++  if (!getClerkPublishableKey()) {
++    return <LocalLoginPage />;
++  }
++
++  return <ClerkLoginPage />;
++}
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 35ae1d5..fe77e2f 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -34,20 +34,21 @@ services:
+     environment:
+       DATABASE_URL: postgresql://ampm:${POSTGRES_PASSWORD}@postgres:5432/ampm?schema=public
+       REDIS_HOST: redis
+       REDIS_PORT: 6379
+       JWT_SECRET: ${JWT_SECRET}
+       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+       JWT_EXPIRES_IN: 15m
+       JWT_REFRESH_EXPIRES_IN: 7d
+       GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
+       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
++      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
+       UPLOAD_DIR: /app/uploads
+       MAX_FILE_SIZE_MB: 5
+       PORT: 3001
+       CLIENT_URL: http://localhost:5173
+     volumes:
+       - uploads:/app/uploads
+     depends_on:
+       postgres:
+         condition: service_healthy
+       redis:
+@@ -71,18 +72,20 @@ services:
+     depends_on:
+       postgres:
+         condition: service_healthy
+       redis:
+         condition: service_healthy
+ 
+   client:
+     build:
+       context: ./client
+       dockerfile: Dockerfile
++      args:
++        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY}
+     ports:
+       - "5173:80"
+     depends_on:
+       - server
+ 
+ volumes:
+   pgdata:
+   uploads:
+diff --git a/docs/superpowers/plans/2026-07-15-clerk-google-oauth.md b/docs/superpowers/plans/2026-07-15-clerk-google-oauth.md
+new file mode 100644
+index 0000000..874c77f
+--- /dev/null
++++ b/docs/superpowers/plans/2026-07-15-clerk-google-oauth.md
+@@ -0,0 +1,359 @@
++# Clerk Google OAuth Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or **superpowers:executing-plans** to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** Add Google sign-in through Clerk while exchanging the verified Clerk session for the existing AMPM JWT pair.
++
++**Architecture:** Clerk owns the Google OAuth flow in the browser. The callback sends a Clerk session token to `POST /api/auth/clerk`; the API verifies it, creates or finds an AMPM user, and issues the existing access/refresh tokens. Existing password auth, JWT middleware, refresh rotation, logout, and protected routes remain unchanged.
++
++**Tech Stack:** React 19, React Router 7, Vite, `@clerk/react`, Express, Prisma/PostgreSQL, `@clerk/backend`, Vitest, TypeScript.
++
++## Global Constraints
++
++- Google/Clerk users are OAuth-only; do not add password creation or recovery for them.
++- Existing local email/password users and AMPM JWT sessions must continue to work unchanged.
++- Do not automatically link a Clerk identity to an existing local-password account with the same email; return a conflict instead.
++- Never log Clerk tokens, AMPM tokens, passwords, or other credential material.
++- Do not replace AMPM JWT verification with Clerk verification across the API.
++- Every new production function must have a focused test, and each new test must be observed failing before implementation.
++
++---
++
++### Task 1: Add Clerk dependencies and configuration surfaces
++
++**Files:**
++- Modify: `client/package.json`, `client/package-lock.json`
++- Modify: `server/package.json`, `server/package-lock.json`
++- Modify: `.env.example`
++- Modify: `docker-compose.yml`
++- Modify: `client/Dockerfile` if its Vite build needs an explicit key argument
++
++**Interfaces:**
++- Produces `VITE_CLERK_PUBLISHABLE_KEY` for the browser and `CLERK_SECRET_KEY` for the API.
++
++- [ ] **Step 1: Add dependencies.**
++
++Run:
++
++```powershell
++Set-Location client
++npm install @clerk/react
++Set-Location ../server
++npm install @clerk/backend
++Set-Location ..
++```
++
++Expected: both manifests and lockfiles contain the new direct dependency and no unrelated package.
++
++- [ ] **Step 2: Add environment variables.**
++
++Add to `.env.example`:
++
++```dotenv
++# Clerk Google OAuth
++CLERK_SECRET_KEY=
++VITE_CLERK_PUBLISHABLE_KEY=
++```
++
++Add `CLERK_SECRET_KEY: \${CLERK_SECRET_KEY}` to the server environment in `docker-compose.yml`. Inspect `client/Dockerfile`; if Vite builds inside Docker without inheriting the host environment, add a build argument and pass `VITE_CLERK_PUBLISHABLE_KEY` through the client build configuration.
++
++- [ ] **Step 3: Verify configuration changes.**
++
++Run:
++
++```powershell
++git diff --check
++Get-Content client/package.json, server/package.json | Select-String '@clerk/'
++```
++
++Expected: no whitespace errors and both Clerk packages are listed once.
++
++- [ ] **Step 4: Commit.**
++
++```powershell
++git add client/package.json client/package-lock.json server/package.json server/package-lock.json .env.example docker-compose.yml client/Dockerfile
++git commit -m "build: add Clerk OAuth dependencies"
++```
++
++### Task 2: Extend the user model for OAuth-only identities
++
++**Files:**
++- Modify: `server/prisma/schema.prisma`
++- Create: `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql`
++
++**Interfaces:**
++- Prisma `User` exposes `clerkUserId: string | null` and `passwordHash: string | null`.
++
++- [ ] **Step 1: Change the schema.**
++
++Update `User`:
++
++```prisma
++passwordHash String? @map("password_hash")
++clerkUserId  String? @unique @map("clerk_user_id")
++```
++
++Keep existing email uniqueness, token fields, relations, and mappings unchanged.
++
++- [ ] **Step 2: Create and apply the migration.**
++
++Run from `server` with the project database available:
++
++```powershell
++npx prisma migrate deploy
++npx prisma generate
++```
++
++Before running the command, create `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql` with:
++
++```sql
++ALTER TABLE "users" ALTER COLUMN "password_hash" DROP NOT NULL;
++ALTER TABLE "users" ADD COLUMN "clerk_user_id" TEXT;
++CREATE UNIQUE INDEX "users_clerk_user_id_key" ON "users"("clerk_user_id");
++```
++
++Expected: deployment makes `password_hash` nullable and adds a nullable unique `clerk_user_id` column without dropping existing data. Do not recreate or delete `users`.
++
++- [ ] **Step 3: Verify the generated client.**
++
++```powershell
++npm run typecheck
++```
++
++Expected: the server typecheck passes after Prisma generation.
++
++- [ ] **Step 4: Commit.**
++
++```powershell
++git add server/prisma/schema.prisma server/prisma/migrations
++git commit -m "feat: store Clerk identities on users"
++```
++
++### Task 3: Implement the Clerk token exchange on the server
++
++**Files:**
++- Create: `server/src/auth/clerk-auth.ts`
++- Modify: `server/src/routes/auth-routes.ts`
++- Modify: `server/src/__tests__/auth-routes.test.ts`
++- Modify: `server/src/__tests__/auth-flow.test.ts`
++
++**Interfaces:**
++- `verifyClerkSessionToken(token: string): Promise<{ userId: string; email: string }>` verifies a Clerk token and returns only the verified identity fields.
++- `POST /api/auth/clerk` returns `{ accessToken: string; refreshToken: string; user: { id: string; email: string } }`.
++
++- [ ] **Step 1: Write failing tests.**
++
++Mock `@clerk/backend` at the module boundary and extend the Prisma test doubles. Add tests named:
++
++```typescript
++it('registers POST /clerk')
++it('rejects a missing Clerk bearer token with 401')
++it('rejects an invalid Clerk token with 401')
++it('creates an OAuth-only user from a verified Clerk identity')
++it('returns the existing user for a known Clerk identity')
++it('rejects a verified email that belongs to a password account with 409')
++it('rejects local login for an OAuth-only user')
++```
++
++For creation, assert Prisma receives `email`, `clerkUserId`, and `passwordHash: null`, and assert both returned tokens are strings. For an OAuth-only local login, return `passwordHash: null` and assert the generic `Invalid email or password.` response.
++
++- [ ] **Step 2: Run focused tests and verify RED.**
++
++```powershell
++Set-Location server
++npm test -- src/__tests__/auth-routes.test.ts src/__tests__/auth-flow.test.ts
++```
++
++Expected: the new tests fail because the route, verifier, and nullable-password handling do not exist. Fix test setup errors until failures are feature failures.
++
++- [ ] **Step 3: Implement the verifier.**
++
++In `server/src/auth/clerk-auth.ts`, import `verifyToken` from `@clerk/backend`. Require `CLERK_SECRET_KEY`, call:
++
++```typescript
++const claims = await verifyToken(token, { secretKey: process.env.CLERK_SECRET_KEY });
++```
++
++Read `claims.sub` as the Clerk user ID. Use the verified email claim when present; otherwise use `createClerkClient({ secretKey })` to retrieve the user and select its verified primary email. Reject missing or unverified email with an actionable 400 error. Return only `{ userId, email }`.
++
++- [ ] **Step 4: Implement the exchange route.**
++
++Add `POST /clerk` without `authenticateToken`. Read a Bearer token, verify it, then apply:
++
++```typescript
++const byClerkId = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
++if (byClerkId) return issueTokens(byClerkId);
++
++const byEmail = await prisma.user.findUnique({ where: { email: identity.email } });
++if (byEmail?.passwordHash) {
++  throw createHttpError(409, 'An AMPM account already exists for this email. Sign in with email and password.');
++}
++if (byEmail) {
++  throw createHttpError(409, 'This email is already linked to another account.');
++}
++
++const user = await prisma.user.create({
++  data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
++});
++return issueTokens(user);
++```
++
++Reuse the existing token-generation function so claims, expiry, and token versions match local auth. Update `/login` to return the generic invalid-credentials error when `passwordHash` is null instead of passing null to bcrypt.
++
++- [ ] **Step 5: Run focused tests and verify GREEN.**
++
++```powershell
++npm test -- src/__tests__/auth-routes.test.ts src/__tests__/auth-flow.test.ts
++```
++
++Expected: all focused auth tests pass with no unhandled warnings.
++
++- [ ] **Step 6: Commit.**
++
++```powershell
++git add server/src/auth/clerk-auth.ts server/src/routes/auth-routes.ts server/src/__tests__/auth-routes.test.ts server/src/__tests__/auth-flow.test.ts
++git commit -m "feat: exchange Clerk sessions for AMPM tokens"
++```
++
++### Task 4: Add the Clerk browser provider and Google redirect flow
++
++**Files:**
++- Modify: `client/src/main.tsx`
++- Modify: `client/src/App.tsx`
++- Modify: `client/src/pages/LoginPage.tsx`
++- Create: `client/src/pages/ClerkCallbackPage.tsx`
++- Modify: `client/src/pages/LoginPage.test.tsx`
++- Create: `client/src/pages/ClerkCallbackPage.test.tsx`
++
++**Interfaces:**
++- `ClerkCallbackPage` completes Clerk's redirect, calls `getToken()`, exchanges it with `/auth/clerk`, stores AMPM tokens, and navigates to `/`.
++- Login keeps the existing form and adds a `Continue with Google` button.
++
++- [ ] **Step 1: Write failing client tests.**
++
++Mock `@clerk/react` hooks/components and the API module. Add:
++
++```typescript
++it('renders Google sign-in alongside the password form')
++it('exchanges the Clerk token and stores AMPM tokens after callback completion')
++it('shows the exchange error when callback authentication fails')
++```
++
++The callback test should make `useAuth()` return `{ isLoaded: true, isSignedIn: true, getToken: async () => 'clerk-session' }`, resolve `api.post('/auth/clerk')`, and assert both localStorage keys and navigation to `/`.
++
++- [ ] **Step 2: Run client tests and verify RED.**
++
++```powershell
++Set-Location client
++npm test -- src/pages/LoginPage.test.tsx src/pages/ClerkCallbackPage.test.tsx
++```
++
++Expected: the new tests fail because the provider, route, and callback page do not exist.
++
++- [ ] **Step 3: Add the provider.**
++
++In `client/src/main.tsx`, wrap the existing router with `ClerkProvider` from `@clerk/react` when `import.meta.env.VITE_CLERK_PUBLISHABLE_KEY` is present. Without the key, render the existing app without a provider so local auth remains usable.
++
++- [ ] **Step 4: Add Google sign-in and callback.**
++
++On `LoginPage`, use `useSignIn()` and call:
++
++```typescript
++await signIn.authenticateWithRedirect({
++  strategy: 'oauth_google',
++  redirectUrl: '/sso-callback',
++  redirectUrlComplete: '/sso-callback',
++});
++```
++
++Render a disabled Google button and explanatory text when the publishable key is absent. Show redirect-initiation errors in the existing banner.
++
++Create `ClerkCallbackPage` using `AuthenticateWithRedirectCallback` and `useAuth`. Once `isLoaded && isSignedIn`, call `getToken()`; reject null with `Could not complete Google sign-in. Please try again.`; post the token as `Authorization: Bearer <token>` to `/auth/clerk`; store the returned AMPM tokens; navigate to `/`. Render a loading message while Clerk completes the redirect.
++
++Register:
++
++```tsx
++<Route path="/sso-callback" element={<ClerkCallbackPage />} />
++```
++
++- [ ] **Step 5: Run client tests and verify GREEN.**
++
++```powershell
++npm test -- src/pages/LoginPage.test.tsx src/pages/ClerkCallbackPage.test.tsx
++```
++
++Expected: all focused client tests pass.
++
++- [ ] **Step 6: Commit.**
++
++```powershell
++git add client/src/main.tsx client/src/App.tsx client/src/pages/LoginPage.tsx client/src/pages/ClerkCallbackPage.tsx client/src/pages/LoginPage.test.tsx client/src/pages/ClerkCallbackPage.test.tsx
++git commit -m "feat: add Clerk Google sign-in flow"
++```
++
++### Task 5: Document setup and run full verification
++
++**Files:**
++- Modify: `README.md`
++- Modify: `client/Dockerfile` and `docker-compose.yml` if Task 1 required the Vite build argument
++
++**Interfaces:**
++- Developers can configure Clerk and Google locally without needing undocumented steps.
++
++- [ ] **Step 1: Document setup.**
++
++Add to `README.md`:
++
++1. Create a Clerk application.
++2. Enable Google under social connections.
++3. Set `CLERK_SECRET_KEY` for the API and `VITE_CLERK_PUBLISHABLE_KEY` for the client.
++4. Register `http://localhost:5173/sso-callback` as the redirect URL in Clerk.
++5. Run the migration before starting the server.
++6. Google emails already used by local accounts must use local login; the app does not silently link them.
++
++Update the authentication description and API table with `POST /api/auth/clerk`.
++
++- [ ] **Step 2: Run all tests.**
++
++```powershell
++Set-Location server
++npm test
++Set-Location ../client
++npm test
++```
++
++Expected: both commands exit 0 with zero failed tests.
++
++- [ ] **Step 3: Run typechecks and builds.**
++
++```powershell
++Set-Location server
++npm run typecheck
++npm run build
++Set-Location ../client
++npm run typecheck
++npm run build
++```
++
++Expected: all four commands exit 0.
++
++- [ ] **Step 4: Inspect the final diff.**
++
++```powershell
++Set-Location ..
++git diff main...HEAD --stat
++git diff main...HEAD --check
++git status --short --branch
++```
++
++Expected: only implementation commits are ahead of `main`; pre-existing user changes remain unstaged and uncommitted. Confirm no secrets, `node_modules`, or unrelated formatting changes are included.
++
++- [ ] **Step 5: Commit documentation.**
++
++```powershell
++git add README.md client/Dockerfile docker-compose.yml
++git commit -m "docs: document Clerk Google OAuth setup"
++```
++
++After this task, rerun the full verification commands before claiming completion, then use the finishing workflow to push as requested.
++
+diff --git a/docs/superpowers/specs/2026-07-15-clerk-google-oauth-design.md b/docs/superpowers/specs/2026-07-15-clerk-google-oauth-design.md
+new file mode 100644
+index 0000000..f1d5f9f
+--- /dev/null
++++ b/docs/superpowers/specs/2026-07-15-clerk-google-oauth-design.md
+@@ -0,0 +1,93 @@
++# Clerk Google OAuth Design
++
++## Goal
++
++Add Google sign-in through Clerk while preserving AMPM's existing email/password authentication, local JWT access and refresh tokens, and protected API behavior.
++
++## Chosen approach
++
++Use Clerk only for Google identity verification and use a server-side exchange to issue the AMPM JWT pair already consumed by the client and API.
++
++The browser signs in with Clerk, obtains the current Clerk session token, and sends it to `POST /api/auth/clerk`. The API verifies the token with Clerk's backend SDK, requires a verified email, creates or finds an OAuth-only AMPM user, and returns the existing access and refresh tokens. After the exchange, the client stores those tokens exactly as it does for local login.
++
++This keeps the current JWT middleware, token rotation, logout revocation, route protection, and existing local accounts unchanged.
++
++## Data model
++
++Extend `User` with:
++
++- `clerkUserId String? @unique` mapped to `clerk_user_id`.
++- `passwordHash String?` so a Google-only account does not need a local password.
++
++The migration must preserve all existing password hashes and users.
++
++When the Clerk exchange succeeds:
++
++1. Find the user by Clerk user ID.
++2. If no user exists, look up the verified Clerk email.
++3. If that email belongs to an existing local-password user, reject the exchange with a conflict and instruct the user to sign in with the existing email/password account. Do not silently link identities.
++4. If no email match exists, create an OAuth-only user with the Clerk ID and a null password hash.
++5. Issue the normal AMPM access and refresh tokens.
++
++The local `/login` route must reject OAuth-only users with the same generic invalid-credentials response used for unknown users, without exposing account type.
++
++## Server behavior
++
++Add `POST /api/auth/clerk`:
++
++- Read a Clerk session token from the `Authorization: Bearer <token>` header.
++- Verify it with `@clerk/backend` using the configured Clerk secret key.
++- Require a verified primary email from the verified Clerk claims.
++- Apply the user lookup/creation rules above.
++- Return `{ accessToken, refreshToken, user: { id, email } }`.
++- Return actionable errors for missing credentials, invalid/expired Clerk tokens, missing verified email, and email conflicts.
++- Never log Clerk tokens or other credential material.
++
++The endpoint must not use AMPM's `authenticateToken` middleware because its input is a Clerk token, not an AMPM JWT. All endpoints after the exchange continue using `authenticateToken`.
++
++## Client behavior
++
++- Wrap the app in `ClerkProvider` using `VITE_CLERK_PUBLISHABLE_KEY`.
++- Add a Google sign-in action to the login page through Clerk's redirect-based OAuth flow.
++- Add a Clerk SSO callback route that waits for Clerk's redirect completion, gets the Clerk session token, calls `/api/auth/clerk`, stores the returned AMPM tokens, and navigates to `/`.
++- Display the server's actionable error on the login page and leave the existing email/password form available.
++- Do not use Clerk's session as the application's route-protection state; AMPM's stored access token remains the source of truth for existing protected routes.
++
++If Clerk is not configured, the local email/password flow must remain usable and the Google action should explain that Google sign-in is not configured rather than crashing the app.
++
++## Configuration and documentation
++
++Document these variables in `.env.example`, Docker Compose, and the setup instructions:
++
++- `CLERK_SECRET_KEY` for the API server.
++- `VITE_CLERK_PUBLISHABLE_KEY` for the Vite client.
++
++The documentation will explain enabling Google in the Clerk dashboard and registering the local callback URL. No secrets are committed.
++
++## Testing
++
++Server tests will cover:
++
++- The route is registered as `POST /clerk`.
++- Missing or malformed bearer credentials are rejected.
++- Invalid Clerk verification is rejected.
++- A verified new Clerk identity creates an OAuth-only user and returns AMPM tokens.
++- A known Clerk identity returns tokens without creating a duplicate.
++- A verified email collision with a local account is rejected.
++- A local login cannot authenticate an OAuth-only user.
++
++Client tests will cover:
++
++- The login page renders a Google sign-in action alongside the existing form.
++- The callback exchanges the Clerk token and stores the AMPM token pair.
++- Exchange failures are shown to the user.
++
++Run server and client test suites, typechecks, and production builds before committing the implementation.
++
++## Out of scope
++
++- Replacing AMPM JWTs with Clerk tokens throughout the API.
++- Adding password creation or password recovery for OAuth-only users.
++- Linking a Google identity to an existing local account automatically.
++- Supporting providers other than Google.
++- Adding a separate user-identity table before a second provider requires it.
+diff --git a/server/package-lock.json b/server/package-lock.json
+index 2a092c3..2f9d7a2 100644
+--- a/server/package-lock.json
++++ b/server/package-lock.json
+@@ -10,20 +10,21 @@
+       "dependencies": {
+         "@prisma/client": "^6.9.0",
+         "bcrypt": "^5.1.1",
+         "bullmq": "^5.34.0",
+         "cors": "^2.8.5",
+         "dotenv": "^16.5.0",
+         "express": "^4.21.0",
+         "ioredis": "^5.4.2",
+         "jsonwebtoken": "^9.0.2",
+         "multer": "^1.4.5-lts.1",
++        "@clerk/backend": "^3.11.5",
+         "swagger-jsdoc": "^6.2.8",
+         "swagger-ui-express": "^5.0.1",
+         "zod": "^3.24.0"
+       },
+       "devDependencies": {
+         "@types/bcrypt": "^5.0.2",
+         "@types/cors": "^2.8.17",
+         "@types/express": "^5.0.0",
+         "@types/jsonwebtoken": "^9.0.7",
+         "@types/multer": "^1.4.12",
+@@ -76,20 +77,109 @@
+         "@apidevtools/openapi-schemas": "^2.1.0",
+         "@apidevtools/swagger-methods": "^3.0.2",
+         "ajv": "^8.17.1",
+         "ajv-draft-04": "^1.0.0",
+         "call-me-maybe": "^1.0.2"
+       },
+       "peerDependencies": {
+         "openapi-types": ">=7"
+       }
+     },
++
++    "node_modules/@clerk/backend": {
++      "version": "3.11.5",
++      "resolved": "https://registry.npmjs.org/@clerk/backend/-/backend-3.11.5.tgz",
++      "integrity": "sha512-HEpf9XlEna1uK+JhFSvIseyvviO1C4rdjv8qe3CSu/qSNMCZD69BSA12IkwBrXuopbrmngNFv/unsNV9jcUepw==",
++      "license": "MIT",
++      "dependencies": {
++        "@clerk/shared": "^4.25.3",
++        "standardwebhooks": "^1.0.0",
++        "tslib": "2.8.1"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      }
++    },
++    "node_modules/@clerk/shared": {
++      "version": "4.25.3",
++      "resolved": "https://registry.npmjs.org/@clerk/shared/-/shared-4.25.3.tgz",
++      "integrity": "sha512-WJOD9vjmCG2k5ynlpYesEXRtBgrJOvON5UV2T6NuCsVTu0dGjHSrnEo5LhUNAAYiKiwd4Mww1EXDRL9ULFkxZw==",
++      "license": "MIT",
++      "dependencies": {
++        "@tanstack/query-core": "^5.100.6",
++        "dequal": "2.0.3",
++        "glob-to-regexp": "0.4.1",
++        "js-cookie": "3.0.7"
++      },
++      "engines": {
++        "node": ">=20.9.0"
++      },
++      "peerDependencies": {
++        "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0",
++        "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0"
++      },
++      "peerDependenciesMeta": {
++        "react": {
++          "optional": true
++        },
++        "react-dom": {
++          "optional": true
++        }
++      }
++    },
++    "node_modules/@stablelib/base64": {
++      "version": "1.0.1",
++      "resolved": "https://registry.npmjs.org/@stablelib/base64/-/base64-1.0.1.tgz",
++      "integrity": "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==",
++      "license": "MIT"
++    },
++    "node_modules/@tanstack/query-core": {
++      "version": "5.101.2",
++      "resolved": "https://registry.npmjs.org/@tanstack/query-core/-/query-core-5.101.2.tgz",
++      "integrity": "sha512-hH5MLoJhF7KaIGd7q3xTXGXvslI+GYlM1Z/35aSHHWaCJWB7XvTSHYuV3eM7tw+aE0mT/xMro4M4Q9rCGHT0lw==",
++      "license": "MIT",
++      "funding": {
++        "type": "github",
++        "url": "https://github.com/sponsors/tannerlinsley"
++      }
++    },
++    "node_modules/fast-sha256": {
++      "version": "1.3.0",
++      "resolved": "https://registry.npmjs.org/fast-sha256/-/fast-sha256-1.3.0.tgz",
++      "integrity": "sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==",
++      "license": "Unlicense"
++    },
++    "node_modules/glob-to-regexp": {
++      "version": "0.4.1",
++      "resolved": "https://registry.npmjs.org/glob-to-regexp/-/glob-to-regexp-0.4.1.tgz",
++      "integrity": "sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw==",
++      "license": "BSD-2-Clause"
++    },
++    "node_modules/js-cookie": {
++      "version": "3.0.7",
++      "resolved": "https://registry.npmjs.org/js-cookie/-/js-cookie-3.0.7.tgz",
++      "integrity": "sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=20"
++      }
++    },
++    "node_modules/standardwebhooks": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/standardwebhooks/-/standardwebhooks-1.0.0.tgz",
++      "integrity": "sha512-BbHGOQK9olHPMvQNHWul6MYlrRTAOKn03rOe4A8O3CLWhNf4YHBqq2HJKKC+sfqpxiBY52pNeesD6jIiLDz8jg==",
++      "license": "MIT",
++      "dependencies": {
++        "@stablelib/base64": "^1.0.0",
++        "fast-sha256": "^1.3.0"
++      }
++    },
+     "node_modules/@esbuild/aix-ppc64": {
+       "version": "0.28.1",
+       "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.1.tgz",
+       "integrity": "sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==",
+       "cpu": [
+         "ppc64"
+       ],
+       "dev": true,
+       "license": "MIT",
+       "optional": true,
+diff --git a/server/package.json b/server/package.json
+index e35ed7a..383132c 100644
+--- a/server/package.json
++++ b/server/package.json
+@@ -8,20 +8,21 @@
+     "build": "tsc",
+     "start": "node dist/index.js",
+     "prisma:generate": "prisma generate",
+     "prisma:migrate": "prisma migrate dev",
+     "prisma:migrate:prod": "prisma migrate deploy",
+     "test": "vitest run",
+     "test:watch": "vitest",
+     "typecheck": "tsc --noEmit"
+   },
+   "dependencies": {
++    "@clerk/backend": "^3.11.5",
+     "@prisma/client": "^6.9.0",
+     "bcrypt": "^5.1.1",
+     "bullmq": "^5.34.0",
+     "cors": "^2.8.5",
+     "dotenv": "^16.5.0",
+     "express": "^4.21.0",
+     "ioredis": "^5.4.2",
+     "jsonwebtoken": "^9.0.2",
+     "multer": "^1.4.5-lts.1",
+     "swagger-ui-express": "^5.0.1",
+diff --git a/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql b/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
+new file mode 100644
+index 0000000..81fde1e
+--- /dev/null
++++ b/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
+@@ -0,0 +1,3 @@
++ALTER TABLE "users" ALTER COLUMN "password_hash" DROP NOT NULL;
++ALTER TABLE "users" ADD COLUMN "clerk_user_id" TEXT;
++CREATE UNIQUE INDEX "users_clerk_user_id_key" ON "users"("clerk_user_id");
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index 79fd8ff..db16614 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -3,21 +3,22 @@ generator client {
+ }
+ 
+ datasource db {
+   provider = "postgresql"
+   url      = env("DATABASE_URL")
+ }
+ 
+ model User {
+   id           String         @id @default(uuid())
+   email        String         @unique
+-  passwordHash String         @map("password_hash")
++  passwordHash String?        @map("password_hash")
++  clerkUserId  String?        @unique @map("clerk_user_id")
+   createdAt    DateTime       @default(now()) @map("created_at")
+   updatedAt    DateTime       @updatedAt @map("updated_at")
+   tokenVersion Int            @default(0) @map("token_version")
+   jobs         Job[]
+   notifications Notification[]
+ 
+   @@map("users")
+ }
+ 
+ model Job {
+diff --git a/server/src/__tests__/auth-flow.test.ts b/server/src/__tests__/auth-flow.test.ts
+index 5d0560b..e43d3fb 100644
+--- a/server/src/__tests__/auth-flow.test.ts
++++ b/server/src/__tests__/auth-flow.test.ts
+@@ -1,70 +1,314 @@
+ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+ import express from "express";
+ import type { Server } from "http";
+ import jwt from "jsonwebtoken";
+ import { authRouter } from "../routes/auth-routes";
++import { errorHandler } from "../middleware/error-handler";
+ 
+ // In-memory user store that mimics the bits of Prisma we exercise.
+ const userStore: { users: any[] } = { users: [] };
+ vi.mock("../db", () => ({
+   default: {
+     user: {
+       findUnique: vi.fn(({ where }: any) =>
+         Promise.resolve(
+-          userStore.users.find((u) => u.email === where.email || u.id === where.id) || null,
++          userStore.users.find(
++            (user) =>
++              user.email === where.email ||
++              user.id === where.id ||
++              user.clerkUserId === where.clerkUserId,
++          ) || null,
+         ),
+       ),
+       create: vi.fn(({ data }: any) => {
+-        const u = { id: "u-" + Math.random(), email: data.email, passwordHash: data.passwordHash, tokenVersion: 0 };
+-        userStore.users.push(u);
+-        return Promise.resolve(u);
++        const user = {
++          id: "u-" + Math.random(),
++          email: data.email,
++          clerkUserId: data.clerkUserId ?? null,
++          passwordHash: data.passwordHash,
++          tokenVersion: 0,
++        };
++        userStore.users.push(user);
++        return Promise.resolve(user);
+       }),
+       update: vi.fn(({ where, data }: any) => {
+-        const u = userStore.users.find((x) => x.id === where.id)!;
+-        if (data.tokenVersion?.increment) u.tokenVersion += data.tokenVersion.increment;
+-        return Promise.resolve(u);
++        const user = userStore.users.find((item) => item.id === where.id)!;
++        if (data.tokenVersion?.increment) {
++          user.tokenVersion += data.tokenVersion.increment;
++        }
++        return Promise.resolve(user);
+       }),
+     },
+   },
+ }));
+ 
++const { verifyTokenMock, getUserMock } = vi.hoisted(() => ({
++  verifyTokenMock: vi.fn(),
++  getUserMock: vi.fn(),
++}));
++
++vi.mock("@clerk/backend", () => ({
++  verifyToken: verifyTokenMock,
++  createClerkClient: vi.fn(() => ({
++    users: {
++      getUser: getUserMock,
++    },
++  })),
++}));
++
++type TestUser = {
++  id: string;
++  email: string;
++  passwordHash: string | null;
++  tokenVersion: number;
++  clerkUserId?: string | null;
++};
++
++function addUser(user: TestUser) {
++  userStore.users.push({
++    clerkUserId: null,
++    ...user,
++  });
++}
++
++function mockVerifiedClerkIdentity(identity: { userId: string; email?: string }) {
++  verifyTokenMock.mockResolvedValue({
++    sub: identity.userId,
++    email: identity.email,
++  });
++}
++
++function addPasswordUser() {
++  addUser({
++    id: "password-user",
++    email: "user@example.com",
++    passwordHash: "hashed-password",
++    tokenVersion: 0,
++  });
++}
++
++function addOAuthOnlyUser() {
++  addUser({
++    id: "oauth-only-user",
++    email: "oauth@example.com",
++    clerkUserId: "clerk_oauth_user",
++    passwordHash: null,
++    tokenVersion: 0,
++  });
++}
++
+ let server: Server;
+ let baseUrl: string;
+ 
+ beforeEach(() => {
+   process.env.JWT_SECRET = "test_jwt_secret";
+   process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
++  process.env.CLERK_SECRET_KEY = "test_clerk_secret";
+   userStore.users = [];
++  verifyTokenMock.mockReset();
++  getUserMock.mockReset();
+   const app = express();
+   app.use(express.json());
+   app.use("/api/auth", authRouter);
++  app.use(errorHandler);
+   server = app.listen(0);
+   baseUrl = `http://127.0.0.1:${(server.address() as any).port}/api/auth`;
+ });
+ 
+ afterAll(() => server?.close());
+ 
+ interface TokenPair {
+   accessToken: string;
+   refreshToken: string;
+ }
+ 
++interface AuthResponse extends TokenPair {
++  user: { id: string; email: string };
++}
++
+ async function signup(): Promise<TokenPair> {
+   const res = await fetch(`${baseUrl}/signup`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ email: "user@example.com", password: "secret123" }),
+   });
+   return (await res.json()) as TokenPair;
+ }
+ 
++describe("POST /clerk", () => {
++  it("rejects a missing Clerk bearer token with 401", async () => {
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: expect.any(String),
++    });
++  });
++
++  it("rejects an invalid Clerk token with 401", async () => {
++    verifyTokenMock.mockRejectedValue(new Error("invalid token"));
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer bad-token",
++      },
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: expect.any(String),
++    });
++  });
++
++  it("creates an OAuth-only user from a verified Clerk identity", async () => {
++    mockVerifiedClerkIdentity({
++      userId: "clerk_user_123",
++      email: "oauth@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer clerk-session-token",
++      },
++    });
++
++    expect(response.status).toBe(200);
++    const body = (await response.json()) as AuthResponse;
++    expect(body.accessToken).toEqual(expect.any(String));
++    expect(body.refreshToken).toEqual(expect.any(String));
++    expect(body.user).toMatchObject({
++      email: "oauth@example.com",
++    });
++    expect(body.user.id).toEqual(expect.any(String));
++    expect(userStore.users[0]).toMatchObject({
++      email: "oauth@example.com",
++      clerkUserId: "clerk_user_123",
++      passwordHash: null,
++    });
++  });
++
++  it("loads a verified primary email when the Clerk token only contains a subject", async () => {
++    verifyTokenMock.mockResolvedValue({ sub: "clerk_fallback_user" });
++    getUserMock.mockResolvedValue({
++      primaryEmailAddressId: "email_123",
++      emailAddresses: [
++        {
++          id: "email_123",
++          emailAddress: "fallback@example.com",
++          verification: { status: "verified" },
++        },
++      ],
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: { Authorization: "Bearer fallback-token" },
++    });
++
++    expect(response.status).toBe(200);
++    await expect(response.json()).resolves.toMatchObject({
++      user: { email: "fallback@example.com" },
++    });
++  });
++
++  it("rejects a Clerk user without a verified primary email", async () => {
++    verifyTokenMock.mockResolvedValue({ sub: "clerk_unverified_user" });
++    getUserMock.mockResolvedValue({
++      primaryEmailAddressId: null,
++      emailAddresses: [],
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: { Authorization: "Bearer unverified-token" },
++    });
++
++    expect(response.status).toBe(400);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "Your Clerk account needs a verified primary email address before you can sign in.",
++    });
++  });
++
++  it("returns the existing user for a known Clerk identity", async () => {
++    addUser({
++      id: "existing-clerk-user",
++      email: "existing@example.com",
++      clerkUserId: "clerk_known_user",
++      passwordHash: null,
++      tokenVersion: 2,
++    });
++    mockVerifiedClerkIdentity({
++      userId: "clerk_known_user",
++      email: "ignored@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer known-session-token",
++      },
++    });
++
++    expect(response.status).toBe(200);
++    await expect(response.json()).resolves.toMatchObject({
++      user: {
++        id: "existing-clerk-user",
++        email: "existing@example.com",
++      },
++      accessToken: expect.any(String),
++      refreshToken: expect.any(String),
++    });
++  });
++
++  it("rejects a verified email that belongs to a password account with 409", async () => {
++    addPasswordUser();
++    mockVerifiedClerkIdentity({
++      userId: "clerk_conflict_user",
++      email: "user@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer conflict-token",
++      },
++    });
++
++    expect(response.status).toBe(409);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "An AMPM account already exists for this email. Sign in with email and password.",
++    });
++  });
++});
++
++describe("login", () => {
++  it("rejects local login for an OAuth-only user", async () => {
++    addOAuthOnlyUser();
++
++    const response = await fetch(`${baseUrl}/login`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "Invalid email or password.",
++    });
++  });
++});
++
+ describe("refresh token rotation + revocation", () => {
+   it("rotates the refresh token on /refresh and rejects the old one", async () => {
+     const { refreshToken } = await signup();
+ 
+     const first = await fetch(`${baseUrl}/refresh`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ refreshToken }),
+     });
+     expect(first.status).toBe(200);
+diff --git a/server/src/__tests__/auth-routes.test.ts b/server/src/__tests__/auth-routes.test.ts
+index 6d7a723..6f49134 100644
+--- a/server/src/__tests__/auth-routes.test.ts
++++ b/server/src/__tests__/auth-routes.test.ts
+@@ -1,58 +1,71 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+ import { authRouter } from "../routes/auth-routes";
+ import prisma from "../db";
+ import bcrypt from "bcrypt";
+ import jwt from "jsonwebtoken";
+ 
+ vi.mock("../db", () => ({ default: { user: { findUnique: vi.fn(), create: vi.fn() } } }));
++vi.mock("@clerk/backend", () => ({
++  verifyToken: vi.fn(),
++  createClerkClient: vi.fn(),
++}));
+ 
+ describe("authRouter", () => {
+   beforeEach(() => {
+     vi.restoreAllMocks();
+     process.env.JWT_SECRET = "test_jwt_secret";
+     process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
+   });
+ 
+   it("is an Express Router", () => {
+     expect(authRouter).toBeDefined();
+     expect(typeof authRouter).toBe("function");
+   });
+ 
+-  it("has signup, login, refresh, and me routes stacked", () => {
++  it("has signup, login, clerk, refresh, and me routes stacked", () => {
+     // Verify routes are registered by inspecting stack
+     const stack = (authRouter as any).stack;
+-    expect(stack.length).toBeGreaterThanOrEqual(4);
++    expect(stack.length).toBeGreaterThanOrEqual(5);
+ 
+     const methods = stack.map((layer: any) => layer.route?.path).filter(Boolean);
+     expect(methods).toContain("/signup");
+     expect(methods).toContain("/login");
++    expect(methods).toContain("/clerk");
+     expect(methods).toContain("/refresh");
+     expect(methods).toContain("/me");
+   });
+ 
+   it("signup route exists with POST method", () => {
+     const signupLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/signup"
+     );
+     expect(signupLayer).toBeDefined();
+     expect(signupLayer.route.methods).toEqual({ post: true });
+   });
+ 
+   it("login route exists with POST method", () => {
+     const loginLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/login"
+     );
+     expect(loginLayer).toBeDefined();
+     expect(loginLayer.route.methods).toEqual({ post: true });
+   });
+ 
++  it("registers POST /clerk", () => {
++    const clerkLayer = (authRouter as any).stack.find(
++      (l: any) => l.route?.path === "/clerk"
++    );
++    expect(clerkLayer).toBeDefined();
++    expect(clerkLayer.route.methods).toEqual({ post: true });
++  });
++
+   it("refresh route exists with POST method", () => {
+     const refreshLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/refresh"
+     );
+     expect(refreshLayer).toBeDefined();
+     expect(refreshLayer.route.methods).toEqual({ post: true });
+   });
+ 
+   it("me route exists with GET method", () => {
+     const meLayer = (authRouter as any).stack.find(
+diff --git a/server/src/auth/clerk-auth.ts b/server/src/auth/clerk-auth.ts
+new file mode 100644
+index 0000000..9278069
+--- /dev/null
++++ b/server/src/auth/clerk-auth.ts
+@@ -0,0 +1,49 @@
++import { createClerkClient, verifyToken } from "@clerk/backend";
++import { createHttpError } from "../helpers/create-error";
++
++interface ClerkIdentity {
++  userId: string;
++  email: string;
++}
++
++/** Verify a Clerk session token and return its verified user identity. */
++export async function verifyClerkSessionToken(token: string): Promise<ClerkIdentity> {
++  const secretKey = process.env.CLERK_SECRET_KEY;
++  if (!secretKey) {
++    throw createHttpError(500, "CLERK_SECRET_KEY is not configured on the server.");
++  }
++
++  let claims: { sub?: unknown; email?: unknown };
++  try {
++    claims = await verifyToken(token, { secretKey });
++  } catch {
++    throw createHttpError(401, "Clerk session token is invalid or expired. Please sign in again.");
++  }
++
++  if (typeof claims.sub !== "string" || !claims.sub) {
++    throw createHttpError(401, "Clerk session token does not identify a user. Please sign in again.");
++  }
++
++  if (typeof claims.email === "string" && claims.email) {
++    return { userId: claims.sub, email: claims.email };
++  }
++
++  const clerkClient = createClerkClient({ secretKey });
++  let clerkUser: Awaited<ReturnType<ReturnType<typeof createClerkClient>["users"]["getUser"]>>;
++  try {
++    clerkUser = await clerkClient.users.getUser(claims.sub);
++  } catch {
++    throw createHttpError(401, "Could not load your Clerk profile. Please sign in again.");
++  }
++
++  const primaryEmail = clerkUser.emailAddresses.find(
++    (emailAddress) =>
++      emailAddress.id === clerkUser.primaryEmailAddressId &&
++      emailAddress.verification?.status === "verified",
++  )?.emailAddress;
++  if (!primaryEmail) {
++    throw createHttpError(400, "Your Clerk account needs a verified primary email address before you can sign in.");
++  }
++
++  return { userId: claims.sub, email: primaryEmail };
++}
+diff --git a/server/src/routes/auth-routes.ts b/server/src/routes/auth-routes.ts
+index 2b45608..5061567 100644
+--- a/server/src/routes/auth-routes.ts
++++ b/server/src/routes/auth-routes.ts
+@@ -1,17 +1,18 @@
+ import { Router, Request, Response, NextFunction } from "express";
+ import bcrypt from "bcrypt";
+ import jwt, { type SignOptions } from "jsonwebtoken";
+ import { z } from "zod";
+ import prisma from "../db";
+ import { authenticateToken } from "../middleware/auth-middleware";
+ import { createHttpError } from "../helpers/create-error";
++import { verifyClerkSessionToken } from "../auth/clerk-auth";
+ 
+ export const authRouter = Router();
+ 
+ const BCRYPT_ROUNDS = 12;
+ 
+ const signupSchema = z.object({
+   email: z.string().email("A valid email address is required."),
+   password: z.string().min(6, "Password must be at least 6 characters."),
+ });
+ 
+@@ -27,20 +28,35 @@ function generateTokens(userId: string, email: string, tokenVersion: number) {
+   }
+ 
+   const accessOptions: SignOptions = { expiresIn: (process.env.JWT_EXPIRES_IN || "15m") as SignOptions["expiresIn"] };
+   const refreshOptions: SignOptions = { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "7d") as SignOptions["expiresIn"] };
+ 
+   const accessToken = jwt.sign({ userId, email, tokenVersion }, jwtSecret, accessOptions);
+   const refreshToken = jwt.sign({ userId, tokenVersion }, refreshSecret, refreshOptions);
+   return { accessToken, refreshToken };
+ }
+ 
++/** Extract a Clerk bearer token or reject the exchange request. */
++function getClerkBearerToken(req: Request): string {
++  const authHeader = req.headers.authorization;
++  if (!authHeader?.startsWith("Bearer ")) {
++    throw createHttpError(401, "Clerk authorization token is required. Send a Bearer token in the Authorization header.");
++  }
++  return authHeader.slice(7);
++}
++
++/** Issue the AMPM token pair for an authenticated user. */
++function issueUserTokens(user: { id: string; email: string; tokenVersion: number }) {
++  const tokens = generateTokens(user.id, user.email, user.tokenVersion);
++  return { ...tokens, user: { id: user.id, email: user.email } };
++}
++
+ /** POST /signup — register a new user and return tokens. */
+ authRouter.post("/signup", async (req: Request, res: Response, next: NextFunction) => {
+   try {
+     const parsed = signupSchema.safeParse(req.body);
+     if (!parsed.success) {
+       throw createHttpError(400, parsed.error.errors[0].message);
+     }
+ 
+     const { email, password } = parsed.data;
+ 
+@@ -66,33 +82,64 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
+     if (!parsed.success) {
+       throw createHttpError(400, parsed.error.errors[0].message);
+     }
+ 
+     const { email, password } = parsed.data;
+ 
+     const user = await prisma.user.findUnique({ where: { email } });
+     if (!user) {
+       throw createHttpError(401, "Invalid email or password.");
+     }
++    if (user.passwordHash == null) {
++      throw createHttpError(401, "Invalid email or password.");
++    }
+ 
+     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+     if (!isPasswordValid) {
+       throw createHttpError(401, "Invalid email or password.");
+     }
+ 
+     const tokens = generateTokens(user.id, user.email, user.tokenVersion);
+     res.json({ ...tokens, user: { id: user.id, email: user.email } });
+   } catch (error) {
+     next(error);
+   }
+ });
+ 
++/** POST /clerk — exchange a verified Clerk session for AMPM tokens. */
++authRouter.post("/clerk", async (req: Request, res: Response, next: NextFunction) => {
++  try {
++    const clerkToken = getClerkBearerToken(req);
++    const identity = await verifyClerkSessionToken(clerkToken);
++
++    const clerkUser = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
++    if (clerkUser) {
++      return res.json(issueUserTokens(clerkUser));
++    }
++
++    const emailUser = await prisma.user.findUnique({ where: { email: identity.email } });
++    if (emailUser?.passwordHash) {
++      throw createHttpError(409, "An AMPM account already exists for this email. Sign in with email and password.");
++    }
++    if (emailUser) {
++      throw createHttpError(409, "This email is already linked to another account.");
++    }
++
++    const user = await prisma.user.create({
++      data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
++    });
++    res.json(issueUserTokens(user));
++  } catch (error) {
++    next(error);
++  }
++});
++
+ /**
+  * POST /refresh — rotate the refresh token and issue a new access token.
+  * The presented refresh token's embedded tokenVersion must match the user's current
+  * version; otherwise it has been revoked (e.g. by logout) and is rejected.
+  */
+ authRouter.post("/refresh", async (req: Request, res: Response, next: NextFunction) => {
+   try {
+     const { refreshToken } = req.body;
+     if (!refreshToken) {
+       throw createHttpError(400, "Refresh token is required.");

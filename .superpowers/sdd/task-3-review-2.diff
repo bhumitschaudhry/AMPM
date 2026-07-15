@@ -1,0 +1,570 @@
+# Review package: 1e4c311..b5f151e
+
+## Commits
+b5f151e test: cover Clerk identity fallback paths
+2bf7899 feat: exchange Clerk sessions for AMPM tokens
+
+## Files changed
+ server/src/__tests__/auth-flow.test.ts   | 246 +++++++++++++++++++++++++++++--
+ server/src/__tests__/auth-routes.test.ts |  17 ++-
+ server/src/auth/clerk-auth.ts            |  49 ++++++
+ server/src/routes/auth-routes.ts         |  44 ++++++
+ 4 files changed, 339 insertions(+), 17 deletions(-)
+
+## Diff
+diff --git a/server/src/__tests__/auth-flow.test.ts b/server/src/__tests__/auth-flow.test.ts
+index b5b7c8a..e43d3fb 100644
+--- a/server/src/__tests__/auth-flow.test.ts
++++ b/server/src/__tests__/auth-flow.test.ts
+@@ -5,79 +5,295 @@ import jwt from "jsonwebtoken";
+ import { authRouter } from "../routes/auth-routes";
+ import { errorHandler } from "../middleware/error-handler";
+ 
+ // In-memory user store that mimics the bits of Prisma we exercise.
+ const userStore: { users: any[] } = { users: [] };
+ vi.mock("../db", () => ({
+   default: {
+     user: {
+       findUnique: vi.fn(({ where }: any) =>
+         Promise.resolve(
+-          userStore.users.find((u) => u.email === where.email || u.id === where.id) || null,
++          userStore.users.find(
++            (user) =>
++              user.email === where.email ||
++              user.id === where.id ||
++              user.clerkUserId === where.clerkUserId,
++          ) || null,
+         ),
+       ),
+       create: vi.fn(({ data }: any) => {
+-        const u = { id: "u-" + Math.random(), email: data.email, passwordHash: data.passwordHash, tokenVersion: 0 };
+-        userStore.users.push(u);
+-        return Promise.resolve(u);
++        const user = {
++          id: "u-" + Math.random(),
++          email: data.email,
++          clerkUserId: data.clerkUserId ?? null,
++          passwordHash: data.passwordHash,
++          tokenVersion: 0,
++        };
++        userStore.users.push(user);
++        return Promise.resolve(user);
+       }),
+       update: vi.fn(({ where, data }: any) => {
+-        const u = userStore.users.find((x) => x.id === where.id)!;
+-        if (data.tokenVersion?.increment) u.tokenVersion += data.tokenVersion.increment;
+-        return Promise.resolve(u);
++        const user = userStore.users.find((item) => item.id === where.id)!;
++        if (data.tokenVersion?.increment) {
++          user.tokenVersion += data.tokenVersion.increment;
++        }
++        return Promise.resolve(user);
+       }),
+     },
+   },
+ }));
+ 
++const { verifyTokenMock, getUserMock } = vi.hoisted(() => ({
++  verifyTokenMock: vi.fn(),
++  getUserMock: vi.fn(),
++}));
++
++vi.mock("@clerk/backend", () => ({
++  verifyToken: verifyTokenMock,
++  createClerkClient: vi.fn(() => ({
++    users: {
++      getUser: getUserMock,
++    },
++  })),
++}));
++
++type TestUser = {
++  id: string;
++  email: string;
++  passwordHash: string | null;
++  tokenVersion: number;
++  clerkUserId?: string | null;
++};
++
++function addUser(user: TestUser) {
++  userStore.users.push({
++    clerkUserId: null,
++    ...user,
++  });
++}
++
++function mockVerifiedClerkIdentity(identity: { userId: string; email?: string }) {
++  verifyTokenMock.mockResolvedValue({
++    sub: identity.userId,
++    email: identity.email,
++  });
++}
++
++function addPasswordUser() {
++  addUser({
++    id: "password-user",
++    email: "user@example.com",
++    passwordHash: "hashed-password",
++    tokenVersion: 0,
++  });
++}
++
++function addOAuthOnlyUser() {
++  addUser({
++    id: "oauth-only-user",
++    email: "oauth@example.com",
++    clerkUserId: "clerk_oauth_user",
++    passwordHash: null,
++    tokenVersion: 0,
++  });
++}
++
+ let server: Server;
+ let baseUrl: string;
+ 
+ beforeEach(() => {
+   process.env.JWT_SECRET = "test_jwt_secret";
+   process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
++  process.env.CLERK_SECRET_KEY = "test_clerk_secret";
+   userStore.users = [];
++  verifyTokenMock.mockReset();
++  getUserMock.mockReset();
+   const app = express();
+   app.use(express.json());
+   app.use("/api/auth", authRouter);
+   app.use(errorHandler);
+   server = app.listen(0);
+   baseUrl = `http://127.0.0.1:${(server.address() as any).port}/api/auth`;
+ });
+ 
+ afterAll(() => server?.close());
+ 
+ interface TokenPair {
+   accessToken: string;
+   refreshToken: string;
+ }
+ 
+-function addOAuthOnlyUser() {
+-  userStore.users.push({
+-    id: "oauth-only-user",
+-    email: "oauth@example.com",
+-    passwordHash: null,
+-    tokenVersion: 0,
+-  });
++interface AuthResponse extends TokenPair {
++  user: { id: string; email: string };
+ }
+ 
+ async function signup(): Promise<TokenPair> {
+   const res = await fetch(`${baseUrl}/signup`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ email: "user@example.com", password: "secret123" }),
+   });
+   return (await res.json()) as TokenPair;
+ }
+ 
++describe("POST /clerk", () => {
++  it("rejects a missing Clerk bearer token with 401", async () => {
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: expect.any(String),
++    });
++  });
++
++  it("rejects an invalid Clerk token with 401", async () => {
++    verifyTokenMock.mockRejectedValue(new Error("invalid token"));
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer bad-token",
++      },
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: expect.any(String),
++    });
++  });
++
++  it("creates an OAuth-only user from a verified Clerk identity", async () => {
++    mockVerifiedClerkIdentity({
++      userId: "clerk_user_123",
++      email: "oauth@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer clerk-session-token",
++      },
++    });
++
++    expect(response.status).toBe(200);
++    const body = (await response.json()) as AuthResponse;
++    expect(body.accessToken).toEqual(expect.any(String));
++    expect(body.refreshToken).toEqual(expect.any(String));
++    expect(body.user).toMatchObject({
++      email: "oauth@example.com",
++    });
++    expect(body.user.id).toEqual(expect.any(String));
++    expect(userStore.users[0]).toMatchObject({
++      email: "oauth@example.com",
++      clerkUserId: "clerk_user_123",
++      passwordHash: null,
++    });
++  });
++
++  it("loads a verified primary email when the Clerk token only contains a subject", async () => {
++    verifyTokenMock.mockResolvedValue({ sub: "clerk_fallback_user" });
++    getUserMock.mockResolvedValue({
++      primaryEmailAddressId: "email_123",
++      emailAddresses: [
++        {
++          id: "email_123",
++          emailAddress: "fallback@example.com",
++          verification: { status: "verified" },
++        },
++      ],
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: { Authorization: "Bearer fallback-token" },
++    });
++
++    expect(response.status).toBe(200);
++    await expect(response.json()).resolves.toMatchObject({
++      user: { email: "fallback@example.com" },
++    });
++  });
++
++  it("rejects a Clerk user without a verified primary email", async () => {
++    verifyTokenMock.mockResolvedValue({ sub: "clerk_unverified_user" });
++    getUserMock.mockResolvedValue({
++      primaryEmailAddressId: null,
++      emailAddresses: [],
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: { Authorization: "Bearer unverified-token" },
++    });
++
++    expect(response.status).toBe(400);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "Your Clerk account needs a verified primary email address before you can sign in.",
++    });
++  });
++
++  it("returns the existing user for a known Clerk identity", async () => {
++    addUser({
++      id: "existing-clerk-user",
++      email: "existing@example.com",
++      clerkUserId: "clerk_known_user",
++      passwordHash: null,
++      tokenVersion: 2,
++    });
++    mockVerifiedClerkIdentity({
++      userId: "clerk_known_user",
++      email: "ignored@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer known-session-token",
++      },
++    });
++
++    expect(response.status).toBe(200);
++    await expect(response.json()).resolves.toMatchObject({
++      user: {
++        id: "existing-clerk-user",
++        email: "existing@example.com",
++      },
++      accessToken: expect.any(String),
++      refreshToken: expect.any(String),
++    });
++  });
++
++  it("rejects a verified email that belongs to a password account with 409", async () => {
++    addPasswordUser();
++    mockVerifiedClerkIdentity({
++      userId: "clerk_conflict_user",
++      email: "user@example.com",
++    });
++
++    const response = await fetch(`${baseUrl}/clerk`, {
++      method: "POST",
++      headers: {
++        Authorization: "Bearer conflict-token",
++      },
++    });
++
++    expect(response.status).toBe(409);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "An AMPM account already exists for this email. Sign in with email and password.",
++    });
++  });
++});
++
+ describe("login", () => {
+-  it("returns the generic auth error for OAuth-only users without a password hash", async () => {
++  it("rejects local login for an OAuth-only user", async () => {
+     addOAuthOnlyUser();
+ 
+     const response = await fetch(`${baseUrl}/login`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
+     });
+ 
+     expect(response.status).toBe(401);
+     await expect(response.json()).resolves.toMatchObject({
+diff --git a/server/src/__tests__/auth-routes.test.ts b/server/src/__tests__/auth-routes.test.ts
+index 6d7a723..6f49134 100644
+--- a/server/src/__tests__/auth-routes.test.ts
++++ b/server/src/__tests__/auth-routes.test.ts
+@@ -1,58 +1,71 @@
+ import { describe, it, expect, vi, beforeEach } from "vitest";
+ import { authRouter } from "../routes/auth-routes";
+ import prisma from "../db";
+ import bcrypt from "bcrypt";
+ import jwt from "jsonwebtoken";
+ 
+ vi.mock("../db", () => ({ default: { user: { findUnique: vi.fn(), create: vi.fn() } } }));
++vi.mock("@clerk/backend", () => ({
++  verifyToken: vi.fn(),
++  createClerkClient: vi.fn(),
++}));
+ 
+ describe("authRouter", () => {
+   beforeEach(() => {
+     vi.restoreAllMocks();
+     process.env.JWT_SECRET = "test_jwt_secret";
+     process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
+   });
+ 
+   it("is an Express Router", () => {
+     expect(authRouter).toBeDefined();
+     expect(typeof authRouter).toBe("function");
+   });
+ 
+-  it("has signup, login, refresh, and me routes stacked", () => {
++  it("has signup, login, clerk, refresh, and me routes stacked", () => {
+     // Verify routes are registered by inspecting stack
+     const stack = (authRouter as any).stack;
+-    expect(stack.length).toBeGreaterThanOrEqual(4);
++    expect(stack.length).toBeGreaterThanOrEqual(5);
+ 
+     const methods = stack.map((layer: any) => layer.route?.path).filter(Boolean);
+     expect(methods).toContain("/signup");
+     expect(methods).toContain("/login");
++    expect(methods).toContain("/clerk");
+     expect(methods).toContain("/refresh");
+     expect(methods).toContain("/me");
+   });
+ 
+   it("signup route exists with POST method", () => {
+     const signupLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/signup"
+     );
+     expect(signupLayer).toBeDefined();
+     expect(signupLayer.route.methods).toEqual({ post: true });
+   });
+ 
+   it("login route exists with POST method", () => {
+     const loginLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/login"
+     );
+     expect(loginLayer).toBeDefined();
+     expect(loginLayer.route.methods).toEqual({ post: true });
+   });
+ 
++  it("registers POST /clerk", () => {
++    const clerkLayer = (authRouter as any).stack.find(
++      (l: any) => l.route?.path === "/clerk"
++    );
++    expect(clerkLayer).toBeDefined();
++    expect(clerkLayer.route.methods).toEqual({ post: true });
++  });
++
+   it("refresh route exists with POST method", () => {
+     const refreshLayer = (authRouter as any).stack.find(
+       (l: any) => l.route?.path === "/refresh"
+     );
+     expect(refreshLayer).toBeDefined();
+     expect(refreshLayer.route.methods).toEqual({ post: true });
+   });
+ 
+   it("me route exists with GET method", () => {
+     const meLayer = (authRouter as any).stack.find(
+diff --git a/server/src/auth/clerk-auth.ts b/server/src/auth/clerk-auth.ts
+new file mode 100644
+index 0000000..9278069
+--- /dev/null
++++ b/server/src/auth/clerk-auth.ts
+@@ -0,0 +1,49 @@
++import { createClerkClient, verifyToken } from "@clerk/backend";
++import { createHttpError } from "../helpers/create-error";
++
++interface ClerkIdentity {
++  userId: string;
++  email: string;
++}
++
++/** Verify a Clerk session token and return its verified user identity. */
++export async function verifyClerkSessionToken(token: string): Promise<ClerkIdentity> {
++  const secretKey = process.env.CLERK_SECRET_KEY;
++  if (!secretKey) {
++    throw createHttpError(500, "CLERK_SECRET_KEY is not configured on the server.");
++  }
++
++  let claims: { sub?: unknown; email?: unknown };
++  try {
++    claims = await verifyToken(token, { secretKey });
++  } catch {
++    throw createHttpError(401, "Clerk session token is invalid or expired. Please sign in again.");
++  }
++
++  if (typeof claims.sub !== "string" || !claims.sub) {
++    throw createHttpError(401, "Clerk session token does not identify a user. Please sign in again.");
++  }
++
++  if (typeof claims.email === "string" && claims.email) {
++    return { userId: claims.sub, email: claims.email };
++  }
++
++  const clerkClient = createClerkClient({ secretKey });
++  let clerkUser: Awaited<ReturnType<ReturnType<typeof createClerkClient>["users"]["getUser"]>>;
++  try {
++    clerkUser = await clerkClient.users.getUser(claims.sub);
++  } catch {
++    throw createHttpError(401, "Could not load your Clerk profile. Please sign in again.");
++  }
++
++  const primaryEmail = clerkUser.emailAddresses.find(
++    (emailAddress) =>
++      emailAddress.id === clerkUser.primaryEmailAddressId &&
++      emailAddress.verification?.status === "verified",
++  )?.emailAddress;
++  if (!primaryEmail) {
++    throw createHttpError(400, "Your Clerk account needs a verified primary email address before you can sign in.");
++  }
++
++  return { userId: claims.sub, email: primaryEmail };
++}
+diff --git a/server/src/routes/auth-routes.ts b/server/src/routes/auth-routes.ts
+index b2c4f0f..5061567 100644
+--- a/server/src/routes/auth-routes.ts
++++ b/server/src/routes/auth-routes.ts
+@@ -1,17 +1,18 @@
+ import { Router, Request, Response, NextFunction } from "express";
+ import bcrypt from "bcrypt";
+ import jwt, { type SignOptions } from "jsonwebtoken";
+ import { z } from "zod";
+ import prisma from "../db";
+ import { authenticateToken } from "../middleware/auth-middleware";
+ import { createHttpError } from "../helpers/create-error";
++import { verifyClerkSessionToken } from "../auth/clerk-auth";
+ 
+ export const authRouter = Router();
+ 
+ const BCRYPT_ROUNDS = 12;
+ 
+ const signupSchema = z.object({
+   email: z.string().email("A valid email address is required."),
+   password: z.string().min(6, "Password must be at least 6 characters."),
+ });
+ 
+@@ -27,20 +28,35 @@ function generateTokens(userId: string, email: string, tokenVersion: number) {
+   }
+ 
+   const accessOptions: SignOptions = { expiresIn: (process.env.JWT_EXPIRES_IN || "15m") as SignOptions["expiresIn"] };
+   const refreshOptions: SignOptions = { expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN || "7d") as SignOptions["expiresIn"] };
+ 
+   const accessToken = jwt.sign({ userId, email, tokenVersion }, jwtSecret, accessOptions);
+   const refreshToken = jwt.sign({ userId, tokenVersion }, refreshSecret, refreshOptions);
+   return { accessToken, refreshToken };
+ }
+ 
++/** Extract a Clerk bearer token or reject the exchange request. */
++function getClerkBearerToken(req: Request): string {
++  const authHeader = req.headers.authorization;
++  if (!authHeader?.startsWith("Bearer ")) {
++    throw createHttpError(401, "Clerk authorization token is required. Send a Bearer token in the Authorization header.");
++  }
++  return authHeader.slice(7);
++}
++
++/** Issue the AMPM token pair for an authenticated user. */
++function issueUserTokens(user: { id: string; email: string; tokenVersion: number }) {
++  const tokens = generateTokens(user.id, user.email, user.tokenVersion);
++  return { ...tokens, user: { id: user.id, email: user.email } };
++}
++
+ /** POST /signup — register a new user and return tokens. */
+ authRouter.post("/signup", async (req: Request, res: Response, next: NextFunction) => {
+   try {
+     const parsed = signupSchema.safeParse(req.body);
+     if (!parsed.success) {
+       throw createHttpError(400, parsed.error.errors[0].message);
+     }
+ 
+     const { email, password } = parsed.data;
+ 
+@@ -82,20 +98,48 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
+       throw createHttpError(401, "Invalid email or password.");
+     }
+ 
+     const tokens = generateTokens(user.id, user.email, user.tokenVersion);
+     res.json({ ...tokens, user: { id: user.id, email: user.email } });
+   } catch (error) {
+     next(error);
+   }
+ });
+ 
++/** POST /clerk — exchange a verified Clerk session for AMPM tokens. */
++authRouter.post("/clerk", async (req: Request, res: Response, next: NextFunction) => {
++  try {
++    const clerkToken = getClerkBearerToken(req);
++    const identity = await verifyClerkSessionToken(clerkToken);
++
++    const clerkUser = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
++    if (clerkUser) {
++      return res.json(issueUserTokens(clerkUser));
++    }
++
++    const emailUser = await prisma.user.findUnique({ where: { email: identity.email } });
++    if (emailUser?.passwordHash) {
++      throw createHttpError(409, "An AMPM account already exists for this email. Sign in with email and password.");
++    }
++    if (emailUser) {
++      throw createHttpError(409, "This email is already linked to another account.");
++    }
++
++    const user = await prisma.user.create({
++      data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
++    });
++    res.json(issueUserTokens(user));
++  } catch (error) {
++    next(error);
++  }
++});
++
+ /**
+  * POST /refresh — rotate the refresh token and issue a new access token.
+  * The presented refresh token's embedded tokenVersion must match the user's current
+  * version; otherwise it has been revoked (e.g. by logout) and is rejected.
+  */
+ authRouter.post("/refresh", async (req: Request, res: Response, next: NextFunction) => {
+   try {
+     const { refreshToken } = req.body;
+     if (!refreshToken) {
+       throw createHttpError(400, "Refresh token is required.");

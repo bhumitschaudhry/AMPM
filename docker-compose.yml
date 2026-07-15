@@ -42,12 +42,14 @@ services:
       GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
-      UPLOAD_DIR: /app/uploads
       MAX_FILE_SIZE_MB: 5
       PORT: 3001
       CLIENT_URL: http://localhost:5173
-    volumes:
-      - uploads:/app/uploads
+      # Cloudflare R2 storage
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME}
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,11 +66,14 @@ services:
       REDIS_PORT: 6379
       GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
-      UPLOAD_DIR: /app/uploads
+      MAX_FILE_SIZE_MB: 5
       MAX_RETRIES: 3
       RETRY_DELAY_MS: 5000
-    volumes:
-      - uploads:/app/uploads
+      # Cloudflare R2 storage
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME}
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,4 +93,3 @@ services:
 
 volumes:
   pgdata:
-  uploads:

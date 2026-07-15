@@ -1,0 +1,371 @@
+# Review package: 2144ed5..1e4c311
+
+## Commits
+1e4c311 fix: guard nullable password hash in login
+8b88a8d feat: store Clerk identities on users
+
+## Files changed
+ .superpowers/sdd/task-2-report.md                  | 196 +++++++++++++++++++++
+ .../migration.sql                                  |   3 +
+ server/prisma/schema.prisma                        |   3 +-
+ server/src/__tests__/auth-flow.test.ts             |  28 +++
+ server/src/routes/auth-routes.ts                   |   3 +
+ 5 files changed, 232 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/.superpowers/sdd/task-2-report.md b/.superpowers/sdd/task-2-report.md
+new file mode 100644
+index 0000000..fc4a9b5
+--- /dev/null
++++ b/.superpowers/sdd/task-2-report.md
+@@ -0,0 +1,196 @@
++# Task 2 Report — Clerk Google OAuth plan
++
++Date: 2026-07-15
++Branch: `main`
++Commit: `8b88a8d` — `feat: store Clerk identities on users`
++
++## Scope owned
++
++- Updated `server/prisma/schema.prisma`
++- Added `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql`
++- Did not modify auth runtime code
++- Preserved unrelated working tree changes and prior Task 1 work
++
++## Files changed
++
++- `server/prisma/schema.prisma`
++- `server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql`
++
++## Implementation summary
++
++Updated the Prisma `User` model exactly per brief:
++
++- `passwordHash` changed from required to nullable and kept mapped to `password_hash`
++- `clerkUserId` added as nullable unique field mapped to `clerk_user_id`
++
++Created the exact migration SQL from the brief:
++
++```sql
++ALTER TABLE "users" ALTER COLUMN "password_hash" DROP NOT NULL;
++ALTER TABLE "users" ADD COLUMN "clerk_user_id" TEXT;
++CREATE UNIQUE INDEX "users_clerk_user_id_key" ON "users"("clerk_user_id");
++```
++
++This is data-preserving and does not recreate or drop the `users` table.
++
++## Commands run
++
++### Read task brief
++
++```powershell
++Get-Content -Raw '.superpowers\sdd\task-2-brief.md'
++```
++
++### Inspect current state
++
++```powershell
++git status --short
++Get-Content -Raw 'server\prisma\schema.prisma'
++Get-Content -Raw 'server\package.json'
++git log --oneline --decorate -n 10 -- server/prisma/schema.prisma server/prisma/migrations
++```
++
++### Verification commands from the brief
++
++Run from `server`:
++
++```powershell
++npx prisma migrate deploy
++```
++
++Output:
++
++```text
++Prisma schema loaded from prisma\schema.prisma
++Error: Prisma schema validation - (get-config wasm)
++Error code: P1012
++error: Environment variable not found: DATABASE_URL.
++  -->  prisma\schema.prisma:7
++   |
++ 6 |   provider = "postgresql"
++ 7 |   url      = env("DATABASE_URL")
++   |
++
++Validation Error Count: 1
++[Context: getConfig]
++
++Prisma CLI Version : 6.19.3
++```
++
++Result: could not deploy migration because no live database connection string was available in the environment.
++
++```powershell
++npx prisma generate
++```
++
++Output:
++
++```text
++Prisma schema loaded from prisma\schema.prisma
++
++✔ Generated Prisma Client (v6.19.3) to .\node_modules\@prisma\client in 237ms
++```
++
++Result: passed.
++
++```powershell
++npm run typecheck
++```
++
++Output:
++
++```text
++> ampm-server@1.0.0 typecheck
++> tsc --noEmit
++```
++
++Result: passed with exit code 0.
++
++### Commit
++
++```powershell
++git add server/prisma/schema.prisma server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
++git commit -m "feat: store Clerk identities on users"
++```
++
++Output:
++
++```text
++[main 8b88a8d] feat: store Clerk identities on users
++ 2 files changed, 5 insertions(+), 1 deletion(-)
++ create mode 100644 server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
++```
++
++## Verification summary
++
++- Prisma migration SQL file matches the brief exactly
++- Prisma client generation succeeded
++- Server typecheck succeeded
++- Live migration deployment could not be executed because `DATABASE_URL` was missing
++
++## TDD evidence
++
++This task was a schema-plus-migration change, not an auth runtime behavior change. I did not add tests because the brief explicitly scoped ownership to the Prisma `User` schema and exact migration only. Instead, verification was done through:
++
++- exact migration SQL creation
++- `npx prisma generate`
++- `npm run typecheck`
++
++No auth runtime code was changed.
++
++## Self-review
++
++- Scope check: only the requested Prisma schema and migration files were changed
++- Data safety check: migration makes `password_hash` nullable and adds nullable `clerk_user_id`; it does not drop or recreate `users`
++- Mapping check: existing email uniqueness, token fields, relations, and table/column mappings remained unchanged
++- Boundary check: no auth route, middleware, Clerk runtime, or other application code was modified
++
++## Concerns / limitations
++
++1. `npx prisma migrate deploy` could not run because `DATABASE_URL` was not set in the current environment.
++2. Git reported CRLF warnings for the touched Prisma files; no functional content issue was introduced, but line endings may be normalized by the user's git settings later.
++3. The repository already had unrelated dirty/untracked changes before this task. They were intentionally left untouched.
++
++---
++
++## Task 2 review fix — nullable passwordHash login guard
++
++Date: 2026-07-15
++
++### Changed files for this fix
++
++- `server/src/routes/auth-routes.ts`
++- `server/src/__tests__/auth-flow.test.ts`
++
++### Regression test evidence
++
++Observed failure before the fix:
++
++```text
++❯ src/__tests__/auth-flow.test.ts (3 tests | 1 failed)
++× login > returns the generic auth error for OAuth-only users without a password hash
++  → expected 500 to be 401 // Object.is equality
++```
++
++Passed after the fix:
++
++```text
++npm test -- --run src/__tests__/auth-flow.test.ts src/__tests__/auth-routes.test.ts
++
++Test Files  2 passed (2)
++Tests       13 passed (13)
++```
++
++Typecheck evidence:
++
++```text
++npm run typecheck
++
++> ampm-server@1.0.0 typecheck
++> tsc --noEmit
++```
++
++### Notes
++
++- Added the smallest safe null guard in `POST /login` so OAuth-only users now receive the existing generic `Invalid email or password.` response.
++- Kept the Clerk route out of scope, as requested.
+diff --git a/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql b/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
+new file mode 100644
+index 0000000..81fde1e
+--- /dev/null
++++ b/server/prisma/migrations/20260715120000_add_clerk_identity/migration.sql
+@@ -0,0 +1,3 @@
++ALTER TABLE "users" ALTER COLUMN "password_hash" DROP NOT NULL;
++ALTER TABLE "users" ADD COLUMN "clerk_user_id" TEXT;
++CREATE UNIQUE INDEX "users_clerk_user_id_key" ON "users"("clerk_user_id");
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index 79fd8ff..db16614 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -3,21 +3,22 @@ generator client {
+ }
+ 
+ datasource db {
+   provider = "postgresql"
+   url      = env("DATABASE_URL")
+ }
+ 
+ model User {
+   id           String         @id @default(uuid())
+   email        String         @unique
+-  passwordHash String         @map("password_hash")
++  passwordHash String?        @map("password_hash")
++  clerkUserId  String?        @unique @map("clerk_user_id")
+   createdAt    DateTime       @default(now()) @map("created_at")
+   updatedAt    DateTime       @updatedAt @map("updated_at")
+   tokenVersion Int            @default(0) @map("token_version")
+   jobs         Job[]
+   notifications Notification[]
+ 
+   @@map("users")
+ }
+ 
+ model Job {
+diff --git a/server/src/__tests__/auth-flow.test.ts b/server/src/__tests__/auth-flow.test.ts
+index 5d0560b..b5b7c8a 100644
+--- a/server/src/__tests__/auth-flow.test.ts
++++ b/server/src/__tests__/auth-flow.test.ts
+@@ -1,15 +1,16 @@
+ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+ import express from "express";
+ import type { Server } from "http";
+ import jwt from "jsonwebtoken";
+ import { authRouter } from "../routes/auth-routes";
++import { errorHandler } from "../middleware/error-handler";
+ 
+ // In-memory user store that mimics the bits of Prisma we exercise.
+ const userStore: { users: any[] } = { users: [] };
+ vi.mock("../db", () => ({
+   default: {
+     user: {
+       findUnique: vi.fn(({ where }: any) =>
+         Promise.resolve(
+           userStore.users.find((u) => u.email === where.email || u.id === where.id) || null,
+         ),
+@@ -31,40 +32,67 @@ vi.mock("../db", () => ({
+ let server: Server;
+ let baseUrl: string;
+ 
+ beforeEach(() => {
+   process.env.JWT_SECRET = "test_jwt_secret";
+   process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
+   userStore.users = [];
+   const app = express();
+   app.use(express.json());
+   app.use("/api/auth", authRouter);
++  app.use(errorHandler);
+   server = app.listen(0);
+   baseUrl = `http://127.0.0.1:${(server.address() as any).port}/api/auth`;
+ });
+ 
+ afterAll(() => server?.close());
+ 
+ interface TokenPair {
+   accessToken: string;
+   refreshToken: string;
+ }
+ 
++function addOAuthOnlyUser() {
++  userStore.users.push({
++    id: "oauth-only-user",
++    email: "oauth@example.com",
++    passwordHash: null,
++    tokenVersion: 0,
++  });
++}
++
+ async function signup(): Promise<TokenPair> {
+   const res = await fetch(`${baseUrl}/signup`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ email: "user@example.com", password: "secret123" }),
+   });
+   return (await res.json()) as TokenPair;
+ }
+ 
++describe("login", () => {
++  it("returns the generic auth error for OAuth-only users without a password hash", async () => {
++    addOAuthOnlyUser();
++
++    const response = await fetch(`${baseUrl}/login`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
++    });
++
++    expect(response.status).toBe(401);
++    await expect(response.json()).resolves.toMatchObject({
++      error: "Invalid email or password.",
++    });
++  });
++});
++
+ describe("refresh token rotation + revocation", () => {
+   it("rotates the refresh token on /refresh and rejects the old one", async () => {
+     const { refreshToken } = await signup();
+ 
+     const first = await fetch(`${baseUrl}/refresh`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ refreshToken }),
+     });
+     expect(first.status).toBe(200);
+diff --git a/server/src/routes/auth-routes.ts b/server/src/routes/auth-routes.ts
+index 2b45608..b2c4f0f 100644
+--- a/server/src/routes/auth-routes.ts
++++ b/server/src/routes/auth-routes.ts
+@@ -66,20 +66,23 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
+     if (!parsed.success) {
+       throw createHttpError(400, parsed.error.errors[0].message);
+     }
+ 
+     const { email, password } = parsed.data;
+ 
+     const user = await prisma.user.findUnique({ where: { email } });
+     if (!user) {
+       throw createHttpError(401, "Invalid email or password.");
+     }
++    if (user.passwordHash == null) {
++      throw createHttpError(401, "Invalid email or password.");
++    }
+ 
+     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+     if (!isPasswordValid) {
+       throw createHttpError(401, "Invalid email or password.");
+     }
+ 
+     const tokens = generateTokens(user.id, user.email, user.tokenVersion);
+     res.json({ ...tokens, user: { id: user.id, email: user.email } });
+   } catch (error) {
+     next(error);

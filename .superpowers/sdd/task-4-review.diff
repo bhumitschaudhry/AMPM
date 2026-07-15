@@ -1,0 +1,633 @@
+# Review package: b5f151e..3c93c05
+
+## Commits
+3c93c05 feat: add Clerk Google sign-in flow
+
+## Files changed
+ client/src/App.tsx                          |   2 +
+ client/src/main.tsx                         |  19 ++-
+ client/src/pages/ClerkCallbackPage.test.tsx |  90 ++++++++++++++
+ client/src/pages/ClerkCallbackPage.tsx      |  85 +++++++++++++
+ client/src/pages/LoginPage.test.tsx         |  87 ++++++++++++-
+ client/src/pages/LoginPage.tsx              | 183 ++++++++++++++++++++++------
+ 6 files changed, 427 insertions(+), 39 deletions(-)
+
+## Diff
+diff --git a/client/src/App.tsx b/client/src/App.tsx
+index 0300998..be0aef7 100644
+--- a/client/src/App.tsx
++++ b/client/src/App.tsx
+@@ -1,30 +1,32 @@
+ import { Routes, Route, Navigate } from 'react-router-dom';
+ import LoginPage from './pages/LoginPage';
+ import SignupPage from './pages/SignupPage';
+ import Dashboard from './pages/Dashboard';
+ import JobDetailPage from './pages/JobDetailPage';
++import ClerkCallbackPage from './pages/ClerkCallbackPage';
+ 
+ /** Wrapper to protect routes requiring authentication. */
+ function ProtectedRoute({ children }: { children: React.ReactNode }) {
+   const token = localStorage.getItem('ampm_access_token');
+   if (!token) {
+     return <Navigate to="/login" replace />;
+   }
+   return <>{children}</>;
+ }
+ 
+ export default function App() {
+   return (
+     <Routes>
+       <Route path="/login" element={<LoginPage />} />
+       <Route path="/signup" element={<SignupPage />} />
++      <Route path="/sso-callback" element={<ClerkCallbackPage />} />
+       <Route
+         path="/"
+         element={
+           <ProtectedRoute>
+             <Dashboard />
+           </ProtectedRoute>
+         }
+       />
+       <Route
+         path="/jobs/:jobId"
+diff --git a/client/src/main.tsx b/client/src/main.tsx
+index 9576dda..e52518d 100644
+--- a/client/src/main.tsx
++++ b/client/src/main.tsx
+@@ -1,13 +1,26 @@
+ import { StrictMode } from 'react';
+ import { createRoot } from 'react-dom/client';
+ import { BrowserRouter } from 'react-router-dom';
++import { ClerkProvider } from '@clerk/react';
+ import App from './App';
+ import './index.css';
+ 
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
++
++const app = (
++  <BrowserRouter>
++    <App />
++  </BrowserRouter>
++);
++
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+-    <BrowserRouter>
+-      <App />
+-    </BrowserRouter>
++    {getClerkPublishableKey() ? (
++      <ClerkProvider publishableKey={getClerkPublishableKey()}>{app}</ClerkProvider>
++    ) : (
++      app
++    )}
+   </StrictMode>
+ );
+diff --git a/client/src/pages/ClerkCallbackPage.test.tsx b/client/src/pages/ClerkCallbackPage.test.tsx
+new file mode 100644
+index 0000000..68c7d7c
+--- /dev/null
++++ b/client/src/pages/ClerkCallbackPage.test.tsx
+@@ -0,0 +1,90 @@
++import { render, screen, waitFor } from '@testing-library/react';
++import { MemoryRouter } from 'react-router-dom';
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++import ClerkCallbackPage from './ClerkCallbackPage';
++import api from '../api';
++
++const navigateMock = vi.fn();
++const useAuthMock = vi.fn();
++
++vi.mock('../api', () => ({
++  default: {
++    post: vi.fn(),
++  },
++}));
++
++vi.mock('react-router-dom', async () => {
++  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
++  return {
++    ...actual,
++    useNavigate: () => navigateMock,
++  };
++});
++
++vi.mock('@clerk/react', () => ({
++  AuthenticateWithRedirectCallback: () => <div data-testid="clerk-redirect-callback" />,
++  useAuth: () => useAuthMock(),
++}));
++
++describe('ClerkCallbackPage', () => {
++  beforeEach(() => {
++    localStorage.clear();
++    vi.clearAllMocks();
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++  });
++
++  it('exchanges the Clerk token and stores AMPM tokens after callback completion', async () => {
++    useAuthMock.mockReturnValue({
++      isLoaded: true,
++      isSignedIn: true,
++      getToken: vi.fn().mockResolvedValue('clerk-session'),
++    });
++    vi.mocked(api.post).mockResolvedValueOnce({
++      data: {
++        accessToken: 'ampm-access',
++        refreshToken: 'ampm-refresh',
++      },
++    });
++
++    render(
++      <MemoryRouter>
++        <ClerkCallbackPage />
++      </MemoryRouter>
++    );
++
++    await waitFor(() =>
++      expect(api.post).toHaveBeenCalledWith(
++        '/auth/clerk',
++        {},
++        {
++          headers: {
++            Authorization: 'Bearer clerk-session',
++          },
++        }
++      )
++    );
++
++    expect(localStorage.getItem('ampm_access_token')).toBe('ampm-access');
++    expect(localStorage.getItem('ampm_refresh_token')).toBe('ampm-refresh');
++    expect(navigateMock).toHaveBeenCalledWith('/');
++  });
++
++  it('shows the exchange error when callback authentication fails', async () => {
++    useAuthMock.mockReturnValue({
++      isLoaded: true,
++      isSignedIn: true,
++      getToken: vi.fn().mockResolvedValue(null),
++    });
++
++    render(
++      <MemoryRouter>
++        <ClerkCallbackPage />
++      </MemoryRouter>
++    );
++
++    expect(
++      await screen.findByText('Could not complete Google sign-in. Please try again.')
++    ).toBeInTheDocument();
++    expect(navigateMock).not.toHaveBeenCalled();
++  });
++});
+diff --git a/client/src/pages/ClerkCallbackPage.tsx b/client/src/pages/ClerkCallbackPage.tsx
+new file mode 100644
+index 0000000..3452518
+--- /dev/null
++++ b/client/src/pages/ClerkCallbackPage.tsx
+@@ -0,0 +1,85 @@
++import { useEffect, useState } from 'react';
++import { AuthenticateWithRedirectCallback, useAuth } from '@clerk/react';
++import { Navigate, useNavigate } from 'react-router-dom';
++import api from '../api';
++
++const callbackErrorMessage = 'Could not complete Google sign-in. Please try again.';
++
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
++
++/** Complete the Clerk redirect and exchange the Clerk token for AMPM tokens. */
++function ClerkCallbackContent() {
++  const { isLoaded, isSignedIn, getToken } = useAuth();
++  const navigate = useNavigate();
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    if (!isLoaded || !isSignedIn) {
++      return;
++    }
++
++    let isCancelled = false;
++
++    async function exchangeClerkToken() {
++      try {
++        const clerkToken = await getToken();
++        if (!clerkToken) {
++          throw new Error(callbackErrorMessage);
++        }
++
++        const response = await api.post(
++          '/auth/clerk',
++          {},
++          {
++            headers: {
++              Authorization: `Bearer ${clerkToken}`,
++            },
++          }
++        );
++
++        if (isCancelled) {
++          return;
++        }
++
++        const { accessToken, refreshToken } = response.data;
++        localStorage.setItem('ampm_access_token', accessToken);
++        localStorage.setItem('ampm_refresh_token', refreshToken);
++        navigate('/');
++      } catch (err: any) {
++        if (isCancelled) {
++          return;
++        }
++
++        setError(err.response?.data?.error || err.message || callbackErrorMessage);
++      }
++    }
++
++    void exchangeClerkToken();
++
++    return () => {
++      isCancelled = true;
++    };
++  }, [getToken, isLoaded, isSignedIn, navigate]);
++
++  return (
++    <div className="auth-container">
++      <div className="auth-card">
++        <AuthenticateWithRedirectCallback />
++        <h1 className="brand-title">AMPM</h1>
++        <p className="auth-subtitle">Completing Google sign-in...</p>
++        {error && <div className="error-banner">{error}</div>}
++      </div>
++    </div>
++  );
++}
++
++/** Guard the Clerk callback route when Clerk is not configured in this client. */
++export default function ClerkCallbackPage() {
++  if (!getClerkPublishableKey()) {
++    return <Navigate to="/login" replace />;
++  }
++
++  return <ClerkCallbackContent />;
++}
+diff --git a/client/src/pages/LoginPage.test.tsx b/client/src/pages/LoginPage.test.tsx
+index b458c1d..88e8a26 100644
+--- a/client/src/pages/LoginPage.test.tsx
++++ b/client/src/pages/LoginPage.test.tsx
+@@ -1,32 +1,115 @@
+-import { render, screen } from '@testing-library/react';
++import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+ import { MemoryRouter } from 'react-router-dom';
+-import { describe, it, expect, vi } from 'vitest';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+ import LoginPage from './LoginPage';
+ 
++const startGoogleSso = vi.fn();
++const useSignInMock = vi.fn();
++
+ vi.mock('../api', () => ({
+   default: {
+     post: vi.fn(),
+   },
+ }));
+ 
++vi.mock('@clerk/react', () => ({
++  useSignIn: () => useSignInMock(),
++}));
++
+ describe('LoginPage', () => {
++  beforeEach(() => {
++    localStorage.clear();
++    vi.clearAllMocks();
++    vi.unstubAllEnvs();
++    useSignInMock.mockReturnValue({
++      fetchStatus: 'idle',
++      signIn: {
++        sso: startGoogleSso,
++      },
++    });
++  });
++
++  afterEach(() => {
++    vi.unstubAllEnvs();
++  });
++
+   it('renders the sign-in form', () => {
+     render(
+       <MemoryRouter>
+         <LoginPage />
+       </MemoryRouter>
+     );
+     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+     expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+     expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
+   });
+ 
+   it('shows a link to signup', () => {
+     render(
+       <MemoryRouter>
+         <LoginPage />
+       </MemoryRouter>
+     );
+     expect(screen.getByRole('link', { name: /create/i })).toBeInTheDocument();
+   });
++
++  it('renders Google sign-in alongside the password form', () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
++    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
++    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
++  });
++
++  it('starts the Clerk Google redirect when the button is clicked', async () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
++
++    await waitFor(() =>
++      expect(startGoogleSso).toHaveBeenCalledWith({
++        strategy: 'oauth_google',
++        redirectUrl: '/sso-callback',
++        redirectCallbackUrl: '/sso-callback',
++      })
++    );
++  });
++
++  it('shows a disabled Google button and helper text when Clerk is not configured', () => {
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    expect(screen.getByRole('button', { name: /continue with google/i })).toBeDisabled();
++    expect(screen.getByText(/google sign-in is unavailable until clerk is configured/i)).toBeInTheDocument();
++  });
++
++  it('shows Clerk redirect errors in the existing banner', async () => {
++    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
++    startGoogleSso.mockRejectedValueOnce(new Error('Google redirect failed.'));
++
++    render(
++      <MemoryRouter>
++        <LoginPage />
++      </MemoryRouter>
++    );
++
++    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
++
++    expect(await screen.findByText('Google redirect failed.')).toBeInTheDocument();
++  });
+ });
+diff --git a/client/src/pages/LoginPage.tsx b/client/src/pages/LoginPage.tsx
+index 3cecf75..28d9154 100644
+--- a/client/src/pages/LoginPage.tsx
++++ b/client/src/pages/LoginPage.tsx
+@@ -1,84 +1,199 @@
+ import React, { useState } from 'react';
+ import { useNavigate, Link } from 'react-router-dom';
++import { useSignIn } from '@clerk/react';
+ import api from '../api';
+ 
+-export default function LoginPage() {
+-  const [email, setEmail] = useState('');
+-  const [password, setPassword] = useState('');
+-  const [error, setError] = useState<string | null>(null);
+-  const [isLoading, setIsLoading] = useState(false);
+-  const navigate = useNavigate();
++function getClerkPublishableKey() {
++  return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
++}
+ 
+-  async function handleSubmit(e: React.FormEvent) {
+-    e.preventDefault();
+-    if (!email || !password) {
+-      setError('Please enter both email and password.');
+-      return;
+-    }
++type LoginCardProps = {
++  error: string | null;
++  email: string;
++  password: string;
++  isLoading: boolean;
++  isGoogleLoading: boolean;
++  isGoogleEnabled: boolean;
++  onEmailChange: (value: string) => void;
++  onPasswordChange: (value: string) => void;
++  onSubmit: (event: React.FormEvent) => Promise<void>;
++  onGoogleSignIn: () => Promise<void>;
++};
+ 
+-    setIsLoading(true);
+-    setError(null);
+-
+-    try {
+-      const response = await api.post('/auth/login', { email, password });
+-      const { accessToken, refreshToken } = response.data;
+-      localStorage.setItem('ampm_access_token', accessToken);
+-      localStorage.setItem('ampm_refresh_token', refreshToken);
+-      navigate('/');
+-    } catch (err: any) {
+-      setError(
+-        err.response?.data?.error ||
+-        'Could not log in. Check your credentials and database connection.'
+-      );
+-    } finally {
+-      setIsLoading(false);
+-    }
+-  }
++/** Show the shared login card with local and Google sign-in actions. */
++function LoginCard({
++  error,
++  email,
++  password,
++  isLoading,
++  isGoogleLoading,
++  isGoogleEnabled,
++  onEmailChange,
++  onPasswordChange,
++  onSubmit,
++  onGoogleSignIn,
++}: LoginCardProps) {
++  const isGoogleDisabled = isLoading || isGoogleLoading || !isGoogleEnabled;
+ 
+   return (
+     <div className="auth-container">
+       <div className="auth-card">
+         <h1 className="brand-title">AMPM</h1>
+         <p className="auth-subtitle">Sign in to your media pipeline account</p>
+-        
++
+         {error && <div className="error-banner">{error}</div>}
+ 
+-        <form onSubmit={handleSubmit} className="auth-form">
++        <form onSubmit={onSubmit} className="auth-form">
+           <div className="form-group">
+             <label htmlFor="email">Email Address</label>
+             <input
+               id="email"
+               type="email"
+               value={email}
+-              onChange={(e) => setEmail(e.target.value)}
++              onChange={(event) => onEmailChange(event.target.value)}
+               placeholder="you@example.com"
+               disabled={isLoading}
+               required
+             />
+           </div>
+ 
+           <div className="form-group">
+             <label htmlFor="password">Password</label>
+             <input
+               id="password"
+               type="password"
+               value={password}
+-              onChange={(e) => setPassword(e.target.value)}
++              onChange={(event) => onPasswordChange(event.target.value)}
+               placeholder="••••••••"
+               disabled={isLoading}
+               required
+             />
+           </div>
+ 
+           <button type="submit" className="btn btn-primary" disabled={isLoading}>
+             {isLoading ? 'Signing In...' : 'Sign In'}
+           </button>
+         </form>
+ 
++        <button
++          type="button"
++          className="btn btn-secondary"
++          disabled={isGoogleDisabled}
++          onClick={() => void onGoogleSignIn()}
++        >
++          {isGoogleLoading ? 'Redirecting to Google...' : 'Continue with Google'}
++        </button>
++
++        {!isGoogleEnabled && (
++          <p>Google sign-in is unavailable until Clerk is configured.</p>
++        )}
++
+         <p className="auth-footer">
+           Don't have an account? <Link to="/signup">Create one now</Link>
+         </p>
+       </div>
+     </div>
+   );
+ }
++
++/** Provide the existing email/password login flow when Clerk is disabled. */
++function LocalLoginPage() {
++  return <LoginPageContent isGoogleEnabled={false} onGoogleSignIn={async () => undefined} />;
++}
++
++/** Provide the Google redirect action when Clerk is configured. */
++function ClerkLoginPage() {
++  const { fetchStatus, signIn } = useSignIn();
++
++  async function handleGoogleSignIn() {
++    if (fetchStatus === 'fetching') {
++      return;
++    }
++
++    await signIn.sso({
++      strategy: 'oauth_google',
++      redirectUrl: '/sso-callback',
++      redirectCallbackUrl: '/sso-callback',
++    });
++  }
++
++  return <LoginPageContent isGoogleEnabled={fetchStatus !== 'fetching'} onGoogleSignIn={handleGoogleSignIn} />;
++}
++
++/** Handle the local password login flow and shared error state. */
++function LoginPageContent({
++  isGoogleEnabled,
++  onGoogleSignIn,
++}: {
++  isGoogleEnabled: boolean;
++  onGoogleSignIn: () => Promise<void>;
++}) {
++  const [email, setEmail] = useState('');
++  const [password, setPassword] = useState('');
++  const [error, setError] = useState<string | null>(null);
++  const [isLoading, setIsLoading] = useState(false);
++  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
++  const navigate = useNavigate();
++
++  async function handleSubmit(event: React.FormEvent) {
++    event.preventDefault();
++    if (!email || !password) {
++      setError('Please enter both email and password.');
++      return;
++    }
++
++    setIsLoading(true);
++    setError(null);
++
++    try {
++      const response = await api.post('/auth/login', { email, password });
++      const { accessToken, refreshToken } = response.data;
++      localStorage.setItem('ampm_access_token', accessToken);
++      localStorage.setItem('ampm_refresh_token', refreshToken);
++      navigate('/');
++    } catch (err: any) {
++      setError(
++        err.response?.data?.error ||
++          'Could not log in. Check your credentials and database connection.'
++      );
++    } finally {
++      setIsLoading(false);
++    }
++  }
++
++  async function handleGoogleSignIn() {
++    setIsGoogleLoading(true);
++    setError(null);
++
++    try {
++      await onGoogleSignIn();
++    } catch (err: any) {
++      setError(err.message || 'Could not start Google sign-in. Please try again.');
++      setIsGoogleLoading(false);
++    }
++  }
++
++  return (
++    <LoginCard
++      error={error}
++      email={email}
++      password={password}
++      isLoading={isLoading}
++      isGoogleLoading={isGoogleLoading}
++      isGoogleEnabled={isGoogleEnabled}
++      onEmailChange={setEmail}
++      onPasswordChange={setPassword}
++      onSubmit={handleSubmit}
++      onGoogleSignIn={handleGoogleSignIn}
++    />
++  );
++}
++
++/** Render the right login experience for the current Clerk configuration. */
++export default function LoginPage() {
++  if (!getClerkPublishableKey()) {
++    return <LocalLoginPage />;
++  }
++
++  return <ClerkLoginPage />;
++}

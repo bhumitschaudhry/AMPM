@@ -1,0 +1,6 @@
+Task 0: baseline complete (server 46 tests, client 5 tests)
+Task 1: complete (commits 8c4cdba..2144ed5, review clean)
+Task 2: complete (commits 2144ed5..1e4c311, review clean; live migration pending DATABASE_URL)
+Task 3: complete (commits 1e4c311..b5f151e, review clean)
+Task 4: complete (commits b5f151e..9bf7bd0, review findings fixed; focused client verification clean)
+Task 5: complete (commit f20148b, full verification clean)
