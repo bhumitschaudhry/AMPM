@@ -73,6 +73,9 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
     if (!user) {
       throw createHttpError(401, "Invalid email or password.");
     }
+    if (user.passwordHash == null) {
+      throw createHttpError(401, "Invalid email or password.");
+    }
 
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {

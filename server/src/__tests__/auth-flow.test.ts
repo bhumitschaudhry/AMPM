@@ -3,6 +3,7 @@ import express from "express";
 import type { Server } from "http";
 import jwt from "jsonwebtoken";
 import { authRouter } from "../routes/auth-routes";
+import { errorHandler } from "../middleware/error-handler";
 
 // In-memory user store that mimics the bits of Prisma we exercise.
 const userStore: { users: any[] } = { users: [] };
@@ -38,6 +39,7 @@ beforeEach(() => {
   const app = express();
   app.use(express.json());
   app.use("/api/auth", authRouter);
+  app.use(errorHandler);
   server = app.listen(0);
   baseUrl = `http://127.0.0.1:${(server.address() as any).port}/api/auth`;
 });
@@ -49,6 +51,15 @@ interface TokenPair {
   refreshToken: string;
 }
 
+function addOAuthOnlyUser() {
+  userStore.users.push({
+    id: "oauth-only-user",
+    email: "oauth@example.com",
+    passwordHash: null,
+    tokenVersion: 0,
+  });
+}
+
 async function signup(): Promise<TokenPair> {
   const res = await fetch(`${baseUrl}/signup`, {
     method: "POST",
@@ -57,6 +68,23 @@ async function signup(): Promise<TokenPair> {
   });
   return (await res.json()) as TokenPair;
 }
+
+describe("login", () => {
+  it("returns the generic auth error for OAuth-only users without a password hash", async () => {
+    addOAuthOnlyUser();
+
+    const response = await fetch(`${baseUrl}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "oauth@example.com", password: "secret123" }),
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Invalid email or password.",
+    });
+  });
+});
 
 describe("refresh token rotation + revocation", () => {
   it("rotates the refresh token on /refresh and rejects the old one", async () => {
