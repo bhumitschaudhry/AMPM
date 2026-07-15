@@ -29,7 +29,7 @@ export async function verifyClerkSessionToken(token: string): Promise<ClerkIdent
   }
 
   const clerkClient = createClerkClient({ secretKey });
-  let clerkUser;
+  let clerkUser: Awaited<ReturnType<ReturnType<typeof createClerkClient>["users"]["getUser"]>>;
   try {
     clerkUser = await clerkClient.users.getUser(claims.sub);
   } catch {

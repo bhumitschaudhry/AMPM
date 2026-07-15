@@ -184,6 +184,53 @@ describe("POST /clerk", () => {
       email: "oauth@example.com",
     });
     expect(body.user.id).toEqual(expect.any(String));
+    expect(userStore.users[0]).toMatchObject({
+      email: "oauth@example.com",
+      clerkUserId: "clerk_user_123",
+      passwordHash: null,
+    });
+  });
+
+  it("loads a verified primary email when the Clerk token only contains a subject", async () => {
+    verifyTokenMock.mockResolvedValue({ sub: "clerk_fallback_user" });
+    getUserMock.mockResolvedValue({
+      primaryEmailAddressId: "email_123",
+      emailAddresses: [
+        {
+          id: "email_123",
+          emailAddress: "fallback@example.com",
+          verification: { status: "verified" },
+        },
+      ],
+    });
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: { Authorization: "Bearer fallback-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      user: { email: "fallback@example.com" },
+    });
+  });
+
+  it("rejects a Clerk user without a verified primary email", async () => {
+    verifyTokenMock.mockResolvedValue({ sub: "clerk_unverified_user" });
+    getUserMock.mockResolvedValue({
+      primaryEmailAddressId: null,
+      emailAddresses: [],
+    });
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: { Authorization: "Bearer unverified-token" },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Your Clerk account needs a verified primary email address before you can sign in.",
+    });
   });
 
   it("returns the existing user for a known Clerk identity", async () => {
