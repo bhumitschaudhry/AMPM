@@ -5,6 +5,10 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
 vi.mock("../db", () => ({ default: { user: { findUnique: vi.fn(), create: vi.fn() } } }));
+vi.mock("@clerk/backend", () => ({
+  verifyToken: vi.fn(),
+  createClerkClient: vi.fn(),
+}));
 
 describe("authRouter", () => {
   beforeEach(() => {
@@ -18,14 +22,15 @@ describe("authRouter", () => {
     expect(typeof authRouter).toBe("function");
   });
 
-  it("has signup, login, refresh, and me routes stacked", () => {
+  it("has signup, login, clerk, refresh, and me routes stacked", () => {
     // Verify routes are registered by inspecting stack
     const stack = (authRouter as any).stack;
-    expect(stack.length).toBeGreaterThanOrEqual(4);
+    expect(stack.length).toBeGreaterThanOrEqual(5);
 
     const methods = stack.map((layer: any) => layer.route?.path).filter(Boolean);
     expect(methods).toContain("/signup");
     expect(methods).toContain("/login");
+    expect(methods).toContain("/clerk");
     expect(methods).toContain("/refresh");
     expect(methods).toContain("/me");
   });
@@ -44,6 +49,14 @@ describe("authRouter", () => {
     );
     expect(loginLayer).toBeDefined();
     expect(loginLayer.route.methods).toEqual({ post: true });
+  });
+
+  it("registers POST /clerk", () => {
+    const clerkLayer = (authRouter as any).stack.find(
+      (l: any) => l.route?.path === "/clerk"
+    );
+    expect(clerkLayer).toBeDefined();
+    expect(clerkLayer.route.methods).toEqual({ post: true });
   });
 
   it("refresh route exists with POST method", () => {

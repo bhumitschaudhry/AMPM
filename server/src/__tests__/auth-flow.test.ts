@@ -12,22 +12,90 @@ vi.mock("../db", () => ({
     user: {
       findUnique: vi.fn(({ where }: any) =>
         Promise.resolve(
-          userStore.users.find((u) => u.email === where.email || u.id === where.id) || null,
+          userStore.users.find(
+            (user) =>
+              user.email === where.email ||
+              user.id === where.id ||
+              user.clerkUserId === where.clerkUserId,
+          ) || null,
         ),
       ),
       create: vi.fn(({ data }: any) => {
-        const u = { id: "u-" + Math.random(), email: data.email, passwordHash: data.passwordHash, tokenVersion: 0 };
-        userStore.users.push(u);
-        return Promise.resolve(u);
+        const user = {
+          id: "u-" + Math.random(),
+          email: data.email,
+          clerkUserId: data.clerkUserId ?? null,
+          passwordHash: data.passwordHash,
+          tokenVersion: 0,
+        };
+        userStore.users.push(user);
+        return Promise.resolve(user);
       }),
       update: vi.fn(({ where, data }: any) => {
-        const u = userStore.users.find((x) => x.id === where.id)!;
-        if (data.tokenVersion?.increment) u.tokenVersion += data.tokenVersion.increment;
-        return Promise.resolve(u);
+        const user = userStore.users.find((item) => item.id === where.id)!;
+        if (data.tokenVersion?.increment) {
+          user.tokenVersion += data.tokenVersion.increment;
+        }
+        return Promise.resolve(user);
       }),
     },
   },
 }));
+
+const { verifyTokenMock, getUserMock } = vi.hoisted(() => ({
+  verifyTokenMock: vi.fn(),
+  getUserMock: vi.fn(),
+}));
+
+vi.mock("@clerk/backend", () => ({
+  verifyToken: verifyTokenMock,
+  createClerkClient: vi.fn(() => ({
+    users: {
+      getUser: getUserMock,
+    },
+  })),
+}));
+
+type TestUser = {
+  id: string;
+  email: string;
+  passwordHash: string | null;
+  tokenVersion: number;
+  clerkUserId?: string | null;
+};
+
+function addUser(user: TestUser) {
+  userStore.users.push({
+    clerkUserId: null,
+    ...user,
+  });
+}
+
+function mockVerifiedClerkIdentity(identity: { userId: string; email?: string }) {
+  verifyTokenMock.mockResolvedValue({
+    sub: identity.userId,
+    email: identity.email,
+  });
+}
+
+function addPasswordUser() {
+  addUser({
+    id: "password-user",
+    email: "user@example.com",
+    passwordHash: "hashed-password",
+    tokenVersion: 0,
+  });
+}
+
+function addOAuthOnlyUser() {
+  addUser({
+    id: "oauth-only-user",
+    email: "oauth@example.com",
+    clerkUserId: "clerk_oauth_user",
+    passwordHash: null,
+    tokenVersion: 0,
+  });
+}
 
 let server: Server;
 let baseUrl: string;
@@ -35,7 +103,10 @@ let baseUrl: string;
 beforeEach(() => {
   process.env.JWT_SECRET = "test_jwt_secret";
   process.env.JWT_REFRESH_SECRET = "test_refresh_secret";
+  process.env.CLERK_SECRET_KEY = "test_clerk_secret";
   userStore.users = [];
+  verifyTokenMock.mockReset();
+  getUserMock.mockReset();
   const app = express();
   app.use(express.json());
   app.use("/api/auth", authRouter);
@@ -51,13 +122,8 @@ interface TokenPair {
   refreshToken: string;
 }
 
-function addOAuthOnlyUser() {
-  userStore.users.push({
-    id: "oauth-only-user",
-    email: "oauth@example.com",
-    passwordHash: null,
-    tokenVersion: 0,
-  });
+interface AuthResponse extends TokenPair {
+  user: { id: string; email: string };
 }
 
 async function signup(): Promise<TokenPair> {
@@ -69,8 +135,111 @@ async function signup(): Promise<TokenPair> {
   return (await res.json()) as TokenPair;
 }
 
+describe("POST /clerk", () => {
+  it("rejects a missing Clerk bearer token with 401", async () => {
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.any(String),
+    });
+  });
+
+  it("rejects an invalid Clerk token with 401", async () => {
+    verifyTokenMock.mockRejectedValue(new Error("invalid token"));
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer bad-token",
+      },
+    });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.any(String),
+    });
+  });
+
+  it("creates an OAuth-only user from a verified Clerk identity", async () => {
+    mockVerifiedClerkIdentity({
+      userId: "clerk_user_123",
+      email: "oauth@example.com",
+    });
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer clerk-session-token",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as AuthResponse;
+    expect(body.accessToken).toEqual(expect.any(String));
+    expect(body.refreshToken).toEqual(expect.any(String));
+    expect(body.user).toMatchObject({
+      email: "oauth@example.com",
+    });
+    expect(body.user.id).toEqual(expect.any(String));
+  });
+
+  it("returns the existing user for a known Clerk identity", async () => {
+    addUser({
+      id: "existing-clerk-user",
+      email: "existing@example.com",
+      clerkUserId: "clerk_known_user",
+      passwordHash: null,
+      tokenVersion: 2,
+    });
+    mockVerifiedClerkIdentity({
+      userId: "clerk_known_user",
+      email: "ignored@example.com",
+    });
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer known-session-token",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      user: {
+        id: "existing-clerk-user",
+        email: "existing@example.com",
+      },
+      accessToken: expect.any(String),
+      refreshToken: expect.any(String),
+    });
+  });
+
+  it("rejects a verified email that belongs to a password account with 409", async () => {
+    addPasswordUser();
+    mockVerifiedClerkIdentity({
+      userId: "clerk_conflict_user",
+      email: "user@example.com",
+    });
+
+    const response = await fetch(`${baseUrl}/clerk`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer conflict-token",
+      },
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "An AMPM account already exists for this email. Sign in with email and password.",
+    });
+  });
+});
+
 describe("login", () => {
-  it("returns the generic auth error for OAuth-only users without a password hash", async () => {
+  it("rejects local login for an OAuth-only user", async () => {
     addOAuthOnlyUser();
 
     const response = await fetch(`${baseUrl}/login`, {
