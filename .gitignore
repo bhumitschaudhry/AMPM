@@ -5,6 +5,5 @@ dist/
 uploads/
 .DS_Store
 coverage/
-deployment_guide.md
 SPEC.pdf
 spec.md
