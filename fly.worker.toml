@@ -1,0 +1,11 @@
+app = "ampm-worker"
+primary_region = "bom"
+
+[build]
+  dockerfile = "worker/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+
+[[vm]]
+  memory = "1024mb"

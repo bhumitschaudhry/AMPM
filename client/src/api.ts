@@ -1,7 +1,9 @@
 import axios from 'axios';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -62,7 +64,7 @@ api.interceptors.response.use(
       }
 
       try {
-        const response = await axios.post('/api/auth/refresh', { refreshToken });
+        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken });
         const { accessToken, refreshToken: newRefreshToken } = response.data;
         localStorage.setItem('ampm_access_token', accessToken);
         if (newRefreshToken) localStorage.setItem('ampm_refresh_token', newRefreshToken);
@@ -85,7 +87,7 @@ api.interceptors.response.use(
 function handleLogout() {
   // Best-effort server-side revocation (rotates the token version); ignore failures.
   if (localStorage.getItem('ampm_refresh_token')) {
-    axios.post('/api/auth/logout', {}).catch(() => undefined);
+    axios.post(`${API_BASE_URL}/auth/logout`, {}).catch(() => undefined);
   }
   localStorage.removeItem('ampm_access_token');
   localStorage.removeItem('ampm_refresh_token');
