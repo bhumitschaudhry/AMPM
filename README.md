@@ -54,7 +54,7 @@ AMPM is an asynchronous media processing service built with the PERN (PostgreSQL
 - **Database**: PostgreSQL (relational structure captures Job -> Images and User -> Notifications mappings).
 - **ORM**: Prisma (provides type-safe schema, migrations, and relationships).
 - **Job Queue**: BullMQ + Redis (provides concurrency limits, automated retries, rate limiting, and failure tracking).
-- **Authentication**: JWT (Access + Refresh tokens). Refresh tokens are **rotated on every use** and are **revocable**: each user carries a `token_version` (in the DB); a refresh token embeds the version it was issued under, and `/refresh` rejects any token whose version no longer matches (e.g. after `/logout`). Secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are required at startup — the server refuses to boot without them.
+- **Authentication**: Email/password authentication and optional Google sign-in through Clerk both exchange into AMPM JWT access and refresh tokens. Refresh tokens are **rotated on every use** and are **revocable**: each user carries a `token_version` (in the DB); a refresh token embeds the version it was issued under, and `/refresh` rejects any token whose version no longer matches (e.g. after `/logout`). Secrets (`JWT_SECRET`, `JWT_REFRESH_SECRET`) are required at startup — the server refuses to boot without them.
 - **Frontend Styling**: Vanilla CSS with a customized premium dark theme system (utilizing variables, transitions, and responsive grid layouts).
 - **API Spec**: Served dynamically via Swagger UI at `/api-docs`.
 - **CI/CD**: GitHub Actions runs each service's tests and production build on pushes and pull requests. Deployment is intentionally left to the target environment because no cloud credentials or target platform are included in this repository.
@@ -72,6 +72,21 @@ Copy `.env.example` to `.env` in the root:
 ```bash
 cp .env.example .env
 ```
+
+#### Clerk Google sign-in
+
+Google sign-in is optional. To enable it locally:
+
+1. Create a Clerk application and enable Google under **User & authentication -> Social connections**.
+2. Set `CLERK_SECRET_KEY` for the API server and `VITE_CLERK_PUBLISHABLE_KEY` for the client in `.env`.
+3. Register `http://localhost:5173/sso-callback` as a Clerk redirect URL.
+4. Apply the database migrations before starting the server:
+
+```bash
+docker-compose run --rm server npx prisma migrate deploy
+```
+
+The client completes Google sign-in with Clerk, exchanges the verified Clerk session for AMPM JWTs, and then uses the existing AMPM API authentication. Google accounts are OAuth-only. If a Google email already belongs to a local password account, sign in with email and password; AMPM does not silently link the accounts.
 
 #### Obtaining API Keys:
 1. **Hugging Face API Token**:
@@ -103,6 +118,7 @@ Fully detailed in `/api-docs` Swagger UI:
 |---|---|---|---|
 | `POST` | `/api/auth/signup` | No | Creates a user account and returns JWTs |
 | `POST` | `/api/auth/login` | No | Logs in and returns tokens |
+| `POST` | `/api/auth/clerk` | No | Exchanges a verified Clerk Google session for AMPM JWTs |
 | `POST` | `/api/auth/refresh` | No | Rotates the refresh token and returns a new access + refresh token pair |
 | `POST` | `/api/auth/logout` | Yes | Revokes the user's refresh tokens (server-side) |
 | `GET`  | `/api/auth/me` | Yes | Retrieves current user |
