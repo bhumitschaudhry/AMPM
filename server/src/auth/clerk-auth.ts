@@ -15,7 +15,8 @@ export async function verifyClerkSessionToken(token: string): Promise<ClerkIdent
 
   let claims: { sub?: unknown; email?: unknown };
   try {
-    claims = await verifyToken(token, { secretKey });
+    const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
+    claims = await verifyToken(token, { secretKey, authorizedParties: [clientUrl] });
   } catch {
     throw createHttpError(401, "Clerk session token is invalid or expired. Please sign in again.");
   }

@@ -10,6 +10,7 @@ export const swaggerSpec = {
   components: {
     securitySchemes: {
       BearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      ClerkBearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
     },
     schemas: {
       User: {
@@ -138,6 +139,19 @@ export const swaggerSpec = {
         responses: {
           "200": { description: "Authenticated", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthResponse" } } } },
           "401": { description: "Invalid credentials", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/auth/clerk": {
+      post: {
+        tags: ["Auth"],
+        summary: "Exchange a Clerk session for AMPM tokens",
+        security: [{ ClerkBearerAuth: [] }],
+        responses: {
+          "200": { description: "Authenticated", content: { "application/json": { schema: { $ref: "#/components/schemas/AuthResponse" } } } },
+          "400": { description: "Clerk profile validation error", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          "401": { description: "Invalid Clerk session", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          "409": { description: "Email already belongs to a local account", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
