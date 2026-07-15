@@ -3,6 +3,7 @@ import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import Dashboard from './pages/Dashboard';
 import JobDetailPage from './pages/JobDetailPage';
+import ClerkCallbackPage from './pages/ClerkCallbackPage';
 
 /** Wrapper to protect routes requiring authentication. */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -18,6 +19,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
+      <Route path="/sso-callback" element={<ClerkCallbackPage />} />
       <Route
         path="/"
         element={

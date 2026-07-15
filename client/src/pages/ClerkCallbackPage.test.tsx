@@ -1,0 +1,90 @@
+import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import ClerkCallbackPage from './ClerkCallbackPage';
+import api from '../api';
+
+const navigateMock = vi.fn();
+const useAuthMock = vi.fn();
+
+vi.mock('../api', () => ({
+  default: {
+    post: vi.fn(),
+  },
+}));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  };
+});
+
+vi.mock('@clerk/react', () => ({
+  AuthenticateWithRedirectCallback: () => <div data-testid="clerk-redirect-callback" />,
+  useAuth: () => useAuthMock(),
+}));
+
+describe('ClerkCallbackPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
+  });
+
+  it('exchanges the Clerk token and stores AMPM tokens after callback completion', async () => {
+    useAuthMock.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      getToken: vi.fn().mockResolvedValue('clerk-session'),
+    });
+    vi.mocked(api.post).mockResolvedValueOnce({
+      data: {
+        accessToken: 'ampm-access',
+        refreshToken: 'ampm-refresh',
+      },
+    });
+
+    render(
+      <MemoryRouter>
+        <ClerkCallbackPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(
+        '/auth/clerk',
+        {},
+        {
+          headers: {
+            Authorization: 'Bearer clerk-session',
+          },
+        }
+      )
+    );
+
+    expect(localStorage.getItem('ampm_access_token')).toBe('ampm-access');
+    expect(localStorage.getItem('ampm_refresh_token')).toBe('ampm-refresh');
+    expect(navigateMock).toHaveBeenCalledWith('/');
+  });
+
+  it('shows the exchange error when callback authentication fails', async () => {
+    useAuthMock.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      getToken: vi.fn().mockResolvedValue(null),
+    });
+
+    render(
+      <MemoryRouter>
+        <ClerkCallbackPage />
+      </MemoryRouter>
+    );
+
+    expect(
+      await screen.findByText('Could not complete Google sign-in. Please try again.')
+    ).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+});

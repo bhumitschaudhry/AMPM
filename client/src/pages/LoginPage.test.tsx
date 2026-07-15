@@ -1,7 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LoginPage from './LoginPage';
+
+const startGoogleSso = vi.fn();
+const useSignInMock = vi.fn();
 
 vi.mock('../api', () => ({
   default: {
@@ -9,7 +12,27 @@ vi.mock('../api', () => ({
   },
 }));
 
+vi.mock('@clerk/react', () => ({
+  useSignIn: () => useSignInMock(),
+}));
+
 describe('LoginPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+    useSignInMock.mockReturnValue({
+      fetchStatus: 'idle',
+      signIn: {
+        sso: startGoogleSso,
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('renders the sign-in form', () => {
     render(
       <MemoryRouter>
@@ -28,5 +51,65 @@ describe('LoginPage', () => {
       </MemoryRouter>
     );
     expect(screen.getByRole('link', { name: /create/i })).toBeInTheDocument();
+  });
+
+  it('renders Google sign-in alongside the password form', () => {
+    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
+
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument();
+  });
+
+  it('starts the Clerk Google redirect when the button is clicked', async () => {
+    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
+
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+
+    await waitFor(() =>
+      expect(startGoogleSso).toHaveBeenCalledWith({
+        strategy: 'oauth_google',
+        redirectUrl: '/sso-callback',
+        redirectCallbackUrl: '/sso-callback',
+      })
+    );
+  });
+
+  it('shows a disabled Google button and helper text when Clerk is not configured', () => {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeDisabled();
+    expect(screen.getByText(/google sign-in is unavailable until clerk is configured/i)).toBeInTheDocument();
+  });
+
+  it('shows Clerk redirect errors in the existing banner', async () => {
+    vi.stubEnv('VITE_CLERK_PUBLISHABLE_KEY', 'pk_test_123');
+    startGoogleSso.mockRejectedValueOnce(new Error('Google redirect failed.'));
+
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
+
+    expect(await screen.findByText('Google redirect failed.')).toBeInTheDocument();
   });
 });
