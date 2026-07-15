@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: ampm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -56,8 +56,8 @@ services:
 
   worker:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: worker/Dockerfile
     environment:
       DATABASE_URL: postgresql://ampm:${POSTGRES_PASSWORD}@postgres:5432/ampm?schema=public
       REDIS_HOST: redis

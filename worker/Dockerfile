@@ -2,13 +2,13 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
+COPY worker/package.json worker/package-lock.json* ./
 RUN npm install
 
-COPY prisma ./prisma
-RUN npx prisma generate
+COPY server/prisma ./prisma
+RUN npx prisma generate --schema ./prisma/schema.prisma
 
-COPY . .
+COPY worker/ .
 RUN npm run build
 
 CMD ["node", "dist/index.js"]
