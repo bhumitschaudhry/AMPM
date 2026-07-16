@@ -45,7 +45,7 @@ erDiagram
     users {
         string id PK
         string email UK
-        string password_hash
+        string password_hash "nullable"
         int token_version
         datetime created_at
     }
@@ -91,7 +91,9 @@ erDiagram
 
 ## 4. Authentication & Security Model
 
-Auth uses a secure access/refresh token model with Refresh Token Rotation (RTR).
+Auth supports local email/password credentials and native Google OAuth (Google Sign-In), backed by a secure access/refresh token model with Refresh Token Rotation (RTR).
+
+### Local Authentication Flow
 
 ```mermaid
 sequenceDiagram
@@ -117,6 +119,25 @@ sequenceDiagram
     Client->>API: POST /api/auth/logout
     API->>DB: Increment token_version (0 -> 1)
     API-->>Client: Success (all issued tokens revoked)
+```
+
+### Google OAuth Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client App
+    actor Google as Google OAuth API
+    participant API as Express Server
+    participant DB as PostgreSQL
+
+    Client->>Google: Authenticate & Retrieve id_token
+    Google-->>Client: Return verified id_token
+    Client->>API: POST /api/auth/google { idToken }
+    API->>API: Verify token signature & audience
+    API->>DB: Find/Create user (password_hash is null)
+    API->>API: Issue Access (v=0) & Refresh (v=0)
+    API-->>Client: Return tokens
 ```
 
 ---
