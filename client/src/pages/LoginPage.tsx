@@ -82,7 +82,6 @@ function LoginCard({
             onError={onGoogleError}
             useOneTap={false}
             text="continue_with"
-            width="100%"
           />
         </div>
 

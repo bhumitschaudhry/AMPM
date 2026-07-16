@@ -33,6 +33,13 @@ app.use(cors({
 
 app.use(express.json());
 
+// Allow the Google OAuth popup to post messages back to this page.
+// The default COOP same-origin policy blocks cross-origin window.postMessage.
+app.use((_req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "unsafe-none");
+  next();
+});
+
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/jobs", jobRouter);
