@@ -1,37 +1,19 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-// CLERK DISABLED — uncomment below to re-enable Clerk OAuth support
-// import { ClerkProvider } from '@clerk/react';
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import App from './App';
 import './index.css';
 
-// CLERK DISABLED — uncomment to restore Clerk publishable key lookup
-// function getClerkPublishableKey() {
-//   return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-// }
+// VITE_GOOGLE_CLIENT_ID must be set in client/.env for the Google button to appear.
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <GoogleOAuthProvider clientId={googleClientId}>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </GoogleOAuthProvider>
   </StrictMode>
 );
-
-// CLERK DISABLED — original ClerkProvider-wrapped render:
-// const app = (
-//   <BrowserRouter>
-//     <App />
-//   </BrowserRouter>
-// );
-//
-// createRoot(document.getElementById('root')!).render(
-//   <StrictMode>
-//     {getClerkPublishableKey() ? (
-//       <ClerkProvider publishableKey={getClerkPublishableKey()}>{app}</ClerkProvider>
-//     ) : (
-//       app
-//     )}
-//   </StrictMode>
-// );

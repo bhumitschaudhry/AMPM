@@ -2,11 +2,10 @@ import { Router, Request, Response, NextFunction } from "express";
 import bcrypt from "bcrypt";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import { z } from "zod";
+import { OAuth2Client } from "google-auth-library";
 import prisma from "../db";
 import { authenticateToken } from "../middleware/auth-middleware";
 import { createHttpError } from "../helpers/create-error";
-// CLERK DISABLED — uncomment to re-enable Google OAuth token exchange
-// import { verifyClerkSessionToken } from "../auth/clerk-auth";
 
 export const authRouter = Router();
 
@@ -35,21 +34,6 @@ function generateTokens(userId: string, email: string, tokenVersion: number) {
   const refreshToken = jwt.sign({ userId, tokenVersion }, refreshSecret, refreshOptions);
   return { accessToken, refreshToken };
 }
-
-// CLERK DISABLED — helper functions for Clerk token exchange preserved in comments:
-// function getClerkBearerToken(req: Request): string {
-//   const authHeader = req.headers.authorization;
-//   if (!authHeader?.startsWith("Bearer ")) {
-//     throw createHttpError(401, "Clerk authorization token is required. Send a Bearer token in the Authorization header.");
-//   }
-//   return authHeader.slice(7);
-// }
-//
-// function issueUserTokens(user: { id: string; email: string; tokenVersion: number }) {
-//   const tokens = generateTokens(user.id, user.email, user.tokenVersion);
-//   return { ...tokens, user: { id: user.id, email: user.email } };
-// }
-
 
 /** POST /signup — register a new user and return tokens. */
 authRouter.post("/signup", async (req: Request, res: Response, next: NextFunction) => {
@@ -106,33 +90,54 @@ authRouter.post("/login", async (req: Request, res: Response, next: NextFunction
   }
 });
 
-// CLERK DISABLED — POST /clerk route preserved in comments for re-enablement:
-// authRouter.post("/clerk", async (req: Request, res: Response, next: NextFunction) => {
-//   try {
-//     const clerkToken = getClerkBearerToken(req);
-//     const identity = await verifyClerkSessionToken(clerkToken);
-//
-//     const clerkUser = await prisma.user.findUnique({ where: { clerkUserId: identity.userId } });
-//     if (clerkUser) {
-//       return res.json(issueUserTokens(clerkUser));
-//     }
-//
-//     const emailUser = await prisma.user.findUnique({ where: { email: identity.email } });
-//     if (emailUser?.passwordHash) {
-//       throw createHttpError(409, "An AMPM account already exists for this email. Sign in with email and password.");
-//     }
-//     if (emailUser) {
-//       throw createHttpError(409, "This email is already linked to another account.");
-//     }
-//
-//     const user = await prisma.user.create({
-//       data: { email: identity.email, clerkUserId: identity.userId, passwordHash: null },
-//     });
-//     res.json(issueUserTokens(user));
-//   } catch (error) {
-//     next(error);
-//   }
-// });
+// One client instance per process — avoids repeated public-key fetches from Google.
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+);
+
+/**
+ * POST /google — exchange a Google id_token for AMPM JWT tokens.
+ * The client obtains the id_token via @react-oauth/google and posts it here.
+ * We verify it server-side with Google's public keys (never trust the client-supplied email),
+ * then find-or-create the user and return the same { accessToken, refreshToken, user } shape
+ * as /login. No Prisma schema changes are needed — passwordHash is already nullable.
+ */
+authRouter.post("/google", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { idToken } = req.body as { idToken?: unknown };
+    if (typeof idToken !== "string" || !idToken) {
+      throw createHttpError(400, "idToken is required and must be a string.");
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+    if (!payload) {
+      throw createHttpError(400, "Google id_token payload is empty.");
+    }
+
+    // Always derive email from the verified payload — never from req.body.
+    const { email, email_verified } = payload;
+    if (!email || !email_verified) {
+      throw createHttpError(400, "Google account must have a verified email address.");
+    }
+
+    // Find existing user or create a new OAuth-only account (passwordHash stays null).
+    let user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      user = await prisma.user.create({ data: { email, passwordHash: null } });
+    }
+
+    const tokens = generateTokens(user.id, user.email, user.tokenVersion);
+    res.json({ ...tokens, user: { id: user.id, email: user.email } });
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * POST /refresh — rotate the refresh token and issue a new access token.

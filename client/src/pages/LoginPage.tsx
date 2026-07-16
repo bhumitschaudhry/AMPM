@@ -1,34 +1,36 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-// CLERK DISABLED — uncomment to re-enable Google SSO via Clerk
-// import { useSignIn } from '@clerk/react';
+import { GoogleLogin } from '@react-oauth/google';
 import api from '../api';
 
-// CLERK DISABLED — uncomment to restore Clerk publishable key lookup
-// function getClerkPublishableKey() {
-//   return import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-// }
-
-type LoginCardProps = {
+type EmailFormProps = {
   error: string | null;
   email: string;
   password: string;
   isLoading: boolean;
+  isGoogleLoading: boolean;
   onEmailChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: (event: React.FormEvent) => Promise<void>;
+  onGoogleSuccess: (credential: string) => Promise<void>;
+  onGoogleError: () => void;
 };
 
-/** Show the login card with email/password sign-in. */
+/** Show the login card with email/password and Google OAuth sign-in. */
 function LoginCard({
   error,
   email,
   password,
   isLoading,
+  isGoogleLoading,
   onEmailChange,
   onPasswordChange,
   onSubmit,
-}: LoginCardProps) {
+  onGoogleSuccess,
+  onGoogleError,
+}: EmailFormProps) {
+  const isAnyLoading = isLoading || isGoogleLoading;
+
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -46,7 +48,7 @@ function LoginCard({
               value={email}
               onChange={(event) => onEmailChange(event.target.value)}
               placeholder="you@example.com"
-              disabled={isLoading}
+              disabled={isAnyLoading}
               required
             />
           </div>
@@ -59,26 +61,36 @@ function LoginCard({
               value={password}
               onChange={(event) => onPasswordChange(event.target.value)}
               placeholder="••••••••"
-              disabled={isLoading}
+              disabled={isAnyLoading}
               required
             />
           </div>
 
-          <button type="submit" className="btn btn-primary" disabled={isLoading}>
+          <button type="submit" className="btn btn-primary" disabled={isAnyLoading}>
             {isLoading ? 'Signing In...' : 'Sign In'}
           </button>
         </form>
 
-        {/* CLERK DISABLED — Google SSO button removed. Uncomment when Clerk is re-enabled:
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={isGoogleDisabled}
-          onClick={() => void onGoogleSignIn()}
-        >
-          {isGoogleLoading ? 'Redirecting to Google...' : 'Continue with Google'}
-        </button>
-        */}
+        <div id="google-login-btn" style={{ marginTop: '1rem', opacity: isGoogleLoading ? 0.6 : 1 }}>
+          {/* GoogleLogin renders Google's own branded button and returns credential (id_token). */}
+          <GoogleLogin
+            onSuccess={(response) => {
+              if (response.credential) {
+                void onGoogleSuccess(response.credential);
+              }
+            }}
+            onError={onGoogleError}
+            useOneTap={false}
+            text="continue_with"
+            width="100%"
+          />
+        </div>
+
+        {isGoogleLoading && (
+          <p style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--text-muted, #888)' }}>
+            Signing in with Google…
+          </p>
+        )}
 
         <p className="auth-footer">
           Don't have an account? <Link to="/signup">Create one now</Link>
@@ -88,12 +100,19 @@ function LoginCard({
   );
 }
 
-/** Handle the local email/password login flow. */
+/** Stores the token pair in localStorage using the keys that api.ts expects. */
+function storeTokens(accessToken: string, refreshToken: string) {
+  localStorage.setItem('ampm_access_token', accessToken);
+  localStorage.setItem('ampm_refresh_token', refreshToken);
+}
+
+/** Handle the local email/password and Google OAuth login flows. */
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const navigate = useNavigate();
 
   async function handleSubmit(event: React.FormEvent) {
@@ -109,8 +128,7 @@ export default function LoginPage() {
     try {
       const response = await api.post('/auth/login', { email, password });
       const { accessToken, refreshToken } = response.data;
-      localStorage.setItem('ampm_access_token', accessToken);
-      localStorage.setItem('ampm_refresh_token', refreshToken);
+      storeTokens(accessToken, refreshToken);
       navigate('/');
     } catch (err: any) {
       setError(
@@ -122,53 +140,45 @@ export default function LoginPage() {
     }
   }
 
+  /**
+   * Called by GoogleLogin after the user completes Google consent.
+   * `credential` is the id_token — we send it to our server for verification.
+   * The server verifies with Google's public keys (never trusting client-supplied email).
+   */
+  async function handleGoogleSuccess(credential: string) {
+    setIsGoogleLoading(true);
+    setError(null);
+    try {
+      const response = await api.post('/auth/google', { idToken: credential });
+      const { accessToken, refreshToken } = response.data;
+      storeTokens(accessToken, refreshToken);
+      navigate('/');
+    } catch (err: any) {
+      setError(
+        err.response?.data?.error ||
+          'Google sign-in failed. Please try again or use email and password.'
+      );
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  }
+
+  function handleGoogleError() {
+    setError('Google sign-in was cancelled or failed. Please try again.');
+  }
+
   return (
     <LoginCard
       error={error}
       email={email}
       password={password}
       isLoading={isLoading}
+      isGoogleLoading={isGoogleLoading}
       onEmailChange={setEmail}
       onPasswordChange={setPassword}
       onSubmit={handleSubmit}
+      onGoogleSuccess={handleGoogleSuccess}
+      onGoogleError={handleGoogleError}
     />
   );
 }
-
-// CLERK DISABLED — historical Clerk implementation preserved below for reference.
-// Re-enabling it also requires restoring the prior shared card props and component.
-//
-// type LoginCardPropsWithGoogle = LoginCardProps & {
-//   isGoogleLoading: boolean;
-//   isGoogleEnabled: boolean;
-//   onGoogleSignIn: () => Promise<void>;
-// };
-//
-// /** Provide the existing email/password login flow when Clerk is disabled. */
-// function LocalLoginPage() {
-//   return <LoginPageContent isGoogleEnabled={false} onGoogleSignIn={async () => undefined} />;
-// }
-//
-// /** Provide the Google redirect action when Clerk is configured. */
-// function ClerkLoginPage() {
-//   const { fetchStatus, signIn } = useSignIn();
-//
-//   async function handleGoogleSignIn() {
-//     if (fetchStatus === 'fetching') return;
-//     await signIn.sso({
-//       strategy: 'oauth_google',
-//       redirectUrl: '/sso-callback',
-//       redirectCallbackUrl: '/sso-callback',
-//     });
-//   }
-//
-//   return <LoginPageContent isGoogleEnabled={fetchStatus !== 'fetching'} onGoogleSignIn={handleGoogleSignIn} />;
-// }
-//
-// /** Render the right login experience for the current Clerk configuration. */
-// export default function LoginPage() {
-//   if (!getClerkPublishableKey()) {
-//     return <LocalLoginPage />;
-//   }
-//   return <ClerkLoginPage />;
-// }

@@ -20,8 +20,14 @@ import { errorHandler } from "./middleware/error-handler";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Strip path so CORS origin comparison never fails due to misconfigured CLIENT_URL with a path.
+const originUrl = process.env.CLIENT_URL || "http://localhost:5173";
+let corsOrigin: string;
+try { corsOrigin = new URL(originUrl).origin; }
+catch { corsOrigin = originUrl; }
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:5173",
+  origin: corsOrigin,
   credentials: true,
 }));
 
