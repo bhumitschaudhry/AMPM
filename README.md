@@ -1,106 +1,56 @@
 # AMPM: AI-Powered Media Processing Microservice
 
-AMPM is an asynchronous media processing service built on the PERN stack. It offloads heavy AI image processing tasks to a distributed worker pipeline powered by BullMQ and Redis.
+AMPM is an asynchronous media processing service built on the PERN stack. It accepts user-uploaded media files, queues them in a distributed worker pipeline powered by BullMQ and Redis, and processes them concurrently through an AI pipeline.
 
 ---
 
-## System Architecture
+## Key Features
 
-```mermaid
-graph TD
-    Client["React Client (Vite)"] <-->|REST API| API["Express API Gateway"]
-    API <-->|Schema/State| Postgres[("PostgreSQL (Prisma)")]
-    API -->|Queue Jobs| Redis[("Redis (BullMQ)")]
-    API <-->|Files| Storage["Shared Storage"]
-    
-    Worker["BullMQ Worker"] <-->|Fetch Jobs| Redis
-    Worker <-->|Write Results| Postgres
-    Worker <-->|Read Files| Storage
-    Worker -->|Caption| HF["Hugging Face API"]
-    Worker -->|Labels & SafeSearch| Google["Google Vision API"]
+- **Asynchronous AI Pipeline**: Runs image captioning (Hugging Face BLIP), label detection (Google Vision), and content safety audits (Google SafeSearch) on every image.
+- **Resilient Processing**: Independent image queueing with automatic retries and exponential backoff using BullMQ.
+- **Secure Authentication**: Built-in email/password credentials and native Google OAuth (Google Sign-In) with access/refresh token rotation.
+- **Safety Flags & Alerts**: Automatically flags unsafe uploads and sends in-app notifications to users.
+- **Granular Control**: View detailed processing reports per image and trigger individual failed-image retries directly from the UI.
+
+---
+
+## Local Quick Start
+
+To spin up the full stack locally (client, server, worker, database, and queue) using Docker Compose, follow these steps:
+
+### 1. Configure the Environment
+Copy the example environment template to create your `.env` file:
+```bash
+cp .env.example .env
+```
+Open `.env` and fill in your external API keys:
+- **Hugging Face Token** (from [Hugging Face Settings](https://huggingface.co/settings/tokens))
+- **Google Cloud Vision API Key** & **Google Client ID** (from [Google Cloud Console](https://console.cloud.google.com/apis/credentials))
+
+### 2. Run Database Migrations
+Deploy the Prisma database schema inside the server container:
+```bash
+docker-compose run --rm server npx prisma migrate deploy
 ```
 
-### Processing Flow
-1. **Ingest**: The client uploads images. The API stores the files locally, writes `pending` database records, enqueues tasks to Redis, and returns Job/Image IDs instantly.
-2. **Queue & Execute**: BullMQ workers pull tasks concurrently (default: 3 concurrent jobs).
-3. **Pipeline**: For each image, the worker:
-   - Generates a caption using Hugging Face's BLIP model.
-   - Detects labels using Google Cloud Vision.
-   - Runs a Google SafeSearch content audit. Flagged items trigger user alerts.
-4. **Retry**: Failed tasks can be retried individually from the user interface.
-
----
-
-## Tech Stack & Key Decisions
-
-- **Database & ORM**: PostgreSQL with Prisma. Mapped relations for [Users](file:///E:/AMPM/server/prisma/schema.prisma), [Jobs](file:///E:/AMPM/server/prisma/schema.prisma), [Images](file:///E:/AMPM/server/prisma/schema.prisma), and [Notifications](file:///E:/AMPM/server/prisma/schema.prisma).
-- **Asynchronous Queue**: BullMQ + Redis for concurrency control, automatic backoff, and retries.
-- **Authentication**: Email/password accounts with custom AMPM JWTs (Access & Refresh tokens).
-  - Refresh tokens are rotated on every use and validated against a database `token_version` for instant revocation on logout.
-- **API Documentation**: Auto-generated Swagger UI served at `/api-docs`.
-
----
-
-## Local Development Setup
-
-### Prerequisites
-- Docker & Docker Compose installed.
-
-### Environment Setup
-1. Copy the template:
-   ```bash
-   cp .env.example .env
-   ```
-2. Configure external services in [.env](file:///E:/AMPM/.env.example):
-   - **Hugging Face**: Create a read token at [Hugging Face Settings](https://huggingface.co/settings/tokens) (`HUGGINGFACE_API_TOKEN`).
-   - **Google Cloud Vision**: Enable the API on Google Cloud Console, generate an API key, and set `GOOGLE_CLOUD_VISION_API_KEY`.
-
-3. Run database migrations:
-   ```bash
-   docker-compose run --rm server npx prisma migrate deploy
-   ```
-
-### Running the Services
-Start the entire stack using Docker Compose:
+### 3. Start the Services
+Build and start all services:
 ```bash
 docker-compose up --build
 ```
+
+Access the applications at:
 - **React Client**: [http://localhost:5173](http://localhost:5173)
 - **API Spec & Gateway**: [http://localhost:3001/api-docs](http://localhost:3001/api-docs)
 
 ---
 
-## API Endpoints
+## Project Documentation Index
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| `POST` | `/api/auth/signup` | No | Registers a new account |
-| `POST` | `/api/auth/login` | No | Authenticates credentials and returns JWTs |
-| `POST` | `/api/auth/refresh` | No | Rotates access/refresh token pair |
-| `POST` | `/api/auth/logout` | Yes | Revokes refresh tokens globally |
-| `GET`  | `/api/auth/me` | Yes | Returns authenticated user details |
-| `POST` | `/api/jobs` | Yes | Uploads one or more images (multipart) |
-| `GET`  | `/api/jobs` | Yes | Lists user's jobs with derived statuses |
-| `GET`  | `/api/jobs/:jobId` | Yes | Returns job metadata and image processing results |
-| `POST` | `/api/jobs/:jobId/images/:imageId/retry` | Yes | Re-enqueues a failed image for processing |
-| `GET`  | `/api/notifications` | Yes | Lists user alerts and safety warnings |
-| `PATCH`| `/api/notifications/:id/read` | Yes | Marks an alert as read |
+For detailed guides, specifications, and reference manuals, please see:
 
----
-
-## Job Status Logic
-
-Job status is derived dynamically at runtime from child images:
-- `pending`: All images are pending.
-- `processing`: At least one image is pending or processing.
-- `completed`: All images completed successfully.
-- `failed`: All images failed.
-- `partially_completed`: All finished, but some succeeded and others failed.
-
----
-
-## Production Scaling
-
-- **Worker Scaling**: Spin up more worker replicas. BullMQ coordinates atomic task lock distribution.
-- **Distributed Storage**: Swap local storage mounts with S3 or Cloudflare R2.
-- **Database & Queue**: Delegate Redis and PostgreSQL to managed services (e.g. AWS ElastiCache, Neon).
+- 📐 **[System Architecture](file:///E:/AMPM/architecture.md)**: Full architecture topology, processing workflows, and database schema mappings.
+- 📡 **[API Reference](file:///E:/AMPM/docs/api.md)**: Authentication protocols, endpoint mappings, and dynamic job status logic.
+- 🚀 **[Deployment Guide](file:///E:/AMPM/deployment_guide.md)**: Deploying production resources (Neon, Upstash, Cloudflare R2, Cloudflare Pages, and Fly.io).
+- 📝 **[Decisions & Limitations](file:///E:/AMPM/docs/limitations_and_assumptions.md)**: Key design decisions, core assumptions, and production scaling recommendations.
+- 🪵 **[ADR 0001: Architecture Decisions](file:///E:/AMPM/docs/adr/0001-architecture-decisions.md)**: Logs of architectural decisions to prevent state drift.
