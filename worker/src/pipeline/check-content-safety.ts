@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
 
 export interface SafetyResult {
   isSafe: boolean;
@@ -24,7 +25,7 @@ export async function checkContentSafety(imageBuffer: Buffer): Promise<SafetyRes
         },
       ],
     },
-    { timeout: 30_000 },
+    { timeout: 30_000, httpsAgent: httpsAgentWithDnsFallback },
   );
 
   const responses = response.data?.responses;

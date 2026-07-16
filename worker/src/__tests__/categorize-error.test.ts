@@ -78,4 +78,11 @@ describe('categorizeError', () => {
     const result = categorizeError(null);
     expect(result.code).toBe('INTERNAL_ERROR');
   });
+
+  it('returns NETWORK_ERROR for wrapped HuggingFace all hosts unreachable error with code property', () => {
+    const error = new Error('HuggingFace request failed (ENOTFOUND): all inference hosts unreachable');
+    (error as any).code = 'ENOTFOUND';
+    const result = categorizeError(error);
+    expect(result.code).toBe('NETWORK_ERROR');
+  });
 });

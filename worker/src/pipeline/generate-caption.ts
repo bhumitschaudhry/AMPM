@@ -1,5 +1,6 @@
 import axios from 'axios';
 import dns from 'dns';
+import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
 
 // HuggingFace inference hosts, tried in order. The canonical api-inference
 // subdomain has been observed returning ENOTFOUND during DNS outages, so the
@@ -24,6 +25,12 @@ const DNS_RESOLVE_ATTEMPTS = 3;
  */
 async function warmDnsResolution(host: string): Promise<void> {
   const servers = [undefined, ...FALLBACK_DNS_SERVERS];
+  let hostname = host;
+  try {
+    hostname = new URL(host).hostname;
+  } catch {
+    // Keep host if it's not a valid URL (though it should be)
+  }
 
   for (let attempt = 0; attempt < DNS_RESOLVE_ATTEMPTS; attempt++) {
     for (const server of servers) {
@@ -31,7 +38,7 @@ async function warmDnsResolution(host: string): Promise<void> {
       if (server) resolver.setServers([server]);
       try {
         await new Promise<void>((resolve, reject) => {
-          resolver.resolve4(host, (err) => (err ? reject(err) : resolve()));
+          resolver.resolve4(hostname, (err) => (err ? reject(err) : resolve()));
         });
         return; // resolved successfully — warm cache and proceed
       } catch {
@@ -61,6 +68,7 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
           Connection: 'close',
         },
         timeout: 30_000,
+        httpsAgent: httpsAgentWithDnsFallback,
       });
 
       if (!response.data) {
@@ -97,7 +105,11 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
 
   // All hosts failed — forward a clear network error for the retry/categorize path.
   const code = lastError && typeof lastError === 'object' && 'code' in lastError ? (lastError as any).code : undefined;
-  throw new Error(
+  const finalError = new Error(
     `HuggingFace request failed${code ? ` (${code})` : ''}: all inference hosts unreachable`,
   );
+  if (code) {
+    (finalError as any).code = code;
+  }
+  throw finalError;
 }

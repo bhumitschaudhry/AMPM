@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
 
 interface Label {
   name: string;
@@ -21,7 +22,7 @@ export async function detectLabels(imageBuffer: Buffer): Promise<Label[]> {
         },
       ],
     },
-    { timeout: 30_000 },
+    { timeout: 30_000, httpsAgent: httpsAgentWithDnsFallback },
   );
 
   const responses = response.data?.responses;
