@@ -197,4 +197,25 @@ describe('processImage', () => {
       }),
     );
   });
+
+  it('fails a corrupt image that fails sharp decoding without retrying', async () => {
+    const sharp = await import('sharp');
+    vi.mocked(sharp.default).mockImplementationOnce(() => ({
+      toBuffer: vi.fn().mockRejectedValueOnce(new Error('Input buffer has corrupt header')),
+    } as any));
+
+    const job = createMockJob();
+    await expect(processImage(job)).rejects.toThrow('Could not decode image file: Input buffer has corrupt header');
+
+    expect(job.discard).toHaveBeenCalledTimes(1);
+    expect(generateCaption).not.toHaveBeenCalled();
+    expect(prisma.image.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'FAILED',
+          failureReason: 'INVALID_FILE',
+        }),
+      }),
+    );
+  });
 });

@@ -116,7 +116,14 @@ function validateImageRecord(image: { mimeType: string; fileSize: number }) {
 /** Download image from R2 and normalize through sharp to validate it's a real image. */
 async function readAndValidateImage(r2Key: string): Promise<Buffer> {
   const rawBuffer = await downloadFromR2(r2Key);
-  return sharp(rawBuffer).toBuffer();
+  try {
+    return await sharp(rawBuffer).toBuffer();
+  } catch (sharpError: any) {
+    throw new ImageValidationError(
+      'INVALID_FILE',
+      `Could not decode image file: ${sharpError.message || 'corrupt or invalid image format'}`
+    );
+  }
 }
 
 /** Set image status in the database. */

@@ -27,7 +27,19 @@ export async function checkContentSafety(imageBuffer: Buffer): Promise<SafetyRes
     { timeout: 30_000 },
   );
 
-  const annotation = response.data.responses[0]?.safeSearchAnnotation ?? {};
+  const responses = response.data?.responses;
+  if (!responses || !Array.isArray(responses) || responses.length === 0) {
+    throw new Error('Invalid response structure from Google Cloud Vision API.');
+  }
+
+  const errorObj = responses[0]?.error;
+  if (errorObj) {
+    throw new Error(
+      `Google Cloud Vision SafeSearch error: ${errorObj.message || 'Unknown error'} (code ${errorObj.code || 'unknown'})`
+    );
+  }
+
+  const annotation = responses[0]?.safeSearchAnnotation ?? {};
   return buildSafetyResult(annotation);
 }
 

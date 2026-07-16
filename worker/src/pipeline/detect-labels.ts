@@ -24,7 +24,19 @@ export async function detectLabels(imageBuffer: Buffer): Promise<Label[]> {
     { timeout: 30_000 },
   );
 
-  const annotations = response.data.responses[0]?.labelAnnotations;
+  const responses = response.data?.responses;
+  if (!responses || !Array.isArray(responses) || responses.length === 0) {
+    throw new Error('Invalid response structure from Google Cloud Vision API.');
+  }
+
+  const errorObj = responses[0]?.error;
+  if (errorObj) {
+    throw new Error(
+      `Google Cloud Vision LabelDetection error: ${errorObj.message || 'Unknown error'} (code ${errorObj.code || 'unknown'})`
+    );
+  }
+
+  const annotations = responses[0]?.labelAnnotations;
   if (!annotations) return [];
 
   return annotations.map((annotation: { description: string; score: number }) => ({

@@ -97,6 +97,26 @@ describe("checkContentSafety", () => {
     const { checkContentSafety } = await import("../pipeline/check-content-safety");
     await expect(checkContentSafety(Buffer.from("test"))).rejects.toThrow();
   });
+
+  it("throws when responses[0] contains an error object", async () => {
+    (axios.post as any).mockResolvedValue({
+      data: {
+        responses: [
+          {
+            error: {
+              code: 3,
+              message: "Bad image data.",
+            },
+          },
+        ],
+      },
+    });
+
+    const { checkContentSafety } = await import("../pipeline/check-content-safety");
+    await expect(checkContentSafety(Buffer.from("test"))).rejects.toThrow(
+      "Google Cloud Vision SafeSearch error: Bad image data. (code 3)"
+    );
+  });
 });
 
 describe("detectLabels", () => {
@@ -141,6 +161,26 @@ describe("detectLabels", () => {
     const { detectLabels } = await import("../pipeline/detect-labels");
     await expect(detectLabels(Buffer.from("test"))).rejects.toThrow();
   });
+
+  it("throws when responses[0] contains an error object", async () => {
+    (axios.post as any).mockResolvedValue({
+      data: {
+        responses: [
+          {
+            error: {
+              code: 3,
+              message: "Bad image data.",
+            },
+          },
+        ],
+      },
+    });
+
+    const { detectLabels } = await import("../pipeline/detect-labels");
+    await expect(detectLabels(Buffer.from("test"))).rejects.toThrow(
+      "Google Cloud Vision LabelDetection error: Bad image data. (code 3)"
+    );
+  });
 });
 
 describe("generateCaption", () => {
@@ -163,5 +203,29 @@ describe("generateCaption", () => {
 
     const { generateCaption } = await import("../pipeline/generate-caption");
     await expect(generateCaption(Buffer.from("test"))).rejects.toThrow();
+  });
+
+  it("throws when HuggingFace returns an error object (like model loading)", async () => {
+    (axios.post as any).mockResolvedValue({
+      data: {
+        error: "Model Salesforce/blip-image-captioning-base is currently loading",
+      },
+    });
+
+    const { generateCaption } = await import("../pipeline/generate-caption");
+    await expect(generateCaption(Buffer.from("test"))).rejects.toThrow(
+      "HuggingFace API error: Model Salesforce/blip-image-captioning-base is currently loading"
+    );
+  });
+
+  it("throws when HuggingFace returns invalid response structure", async () => {
+    (axios.post as any).mockResolvedValue({
+      data: "not-an-array-or-error-object",
+    });
+
+    const { generateCaption } = await import("../pipeline/generate-caption");
+    await expect(generateCaption(Buffer.from("test"))).rejects.toThrow(
+      "Invalid response structure from HuggingFace caption API"
+    );
   });
 });
