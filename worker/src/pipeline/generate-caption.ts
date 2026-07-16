@@ -1,24 +1,28 @@
 import axios from 'axios';
 import dns from 'dns';
 
-const HUGGINGFACE_CAPTION_URL =
-  'https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base';
+// HuggingFace inference hosts, tried in order. The canonical api-inference
+// subdomain has been observed returning ENOTFOUND during DNS outages, so the
+// primary endpoint is now router.huggingface.co using the hf-inference path
+// (per HF docs: https://router.huggingface.co/hf-inference/models/<MODEL>).
+// The legacy api-inference host is kept as a fallback in case it recovers.
+const HUGGINGFACE_HOSTS = [
+  'https://router.huggingface.co/hf-inference',
+  'https://api-inference.huggingface.co',
+];
+const HUGGINGFACE_MODEL_PATH = '/models/Salesforce/blip-image-captioning-base';
 
-// Public fallback resolvers used when the system resolver transiently fails
-// (e.g. intermittent `ENOTFOUND` for api-inference.huggingface.co).
+// Public fallback resolvers used when the system resolver transiently fails.
 const FALLBACK_DNS_SERVERS = ['8.8.8.8', '1.1.1.1'];
 const DNS_RESOLVE_ATTEMPTS = 3;
 
 /**
- * Best-effort warm-up of the HuggingFace host DNS using the system resolver,
- * retrying with public fallback DNS servers. This absorbs transient DNS
- * failures (ENOTFOUND) by pre-populating the resolver cache, but it never blocks
- * the request: if every attempt fails we still let axios attempt the call
- * (which performs its own resolution). Kept non-fatal so the real failure mode
- * (and BullMQ retry) is driven by the actual request, not the warm-up.
+ * Best-effort warm-up of the given HuggingFace host DNS using the system
+ * resolver, retrying with public fallback DNS servers. This absorbs transient
+ * DNS failures (ENOTFOUND) by pre-populating the resolver cache, but it never
+ * blocks the request: if every attempt fails we still let axios try.
  */
-async function warmDnsResolution(): Promise<void> {
-  const host = new URL(HUGGINGFACE_CAPTION_URL).hostname;
+async function warmDnsResolution(host: string): Promise<void> {
   const servers = [undefined, ...FALLBACK_DNS_SERVERS];
 
   for (let attempt = 0; attempt < DNS_RESOLVE_ATTEMPTS; attempt++) {
@@ -42,44 +46,58 @@ async function warmDnsResolution(): Promise<void> {
 
 /** Send image to HuggingFace BLIP model and return the generated caption. */
 export async function generateCaption(imageBuffer: Buffer): Promise<string> {
-  try {
-    // Stabilize DNS before the request: transient ENOTFOUND must not exhaust retries.
-    await warmDnsResolution();
+  let lastError: unknown;
 
-    const response = await axios.post(HUGGINGFACE_CAPTION_URL, imageBuffer, {
-      headers: {
-        Authorization: `Bearer ${process.env.HUGGINGFACE_API_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
-        Connection: 'close',
-      },
-      timeout: 30_000,
-    });
+  // Try each HuggingFace host in turn so a DNS/network outage on one endpoint
+  // (e.g. api-inference.huggingface.co ENOTFOUND) falls through to the next.
+  for (const host of HUGGINGFACE_HOSTS) {
+    try {
+      await warmDnsResolution(host);
 
-    if (!response.data) {
-      throw new Error('Empty response from HuggingFace caption API');
+      const response = await axios.post(`${host}${HUGGINGFACE_MODEL_PATH}`, imageBuffer, {
+        headers: {
+          Authorization: `Bearer ${process.env.HUGGINGFACE_API_TOKEN}`,
+          'Content-Type': 'application/octet-stream',
+          Connection: 'close',
+        },
+        timeout: 30_000,
+      });
+
+      if (!response.data) {
+        throw new Error('Empty response from HuggingFace caption API');
+      }
+
+      if (typeof response.data === 'object' && 'error' in response.data) {
+        throw new Error(`HuggingFace API error: ${response.data.error || 'Unknown error'}`);
+      }
+
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        throw new Error('Invalid response structure from HuggingFace caption API');
+      }
+
+      const firstResult = response.data[0];
+      if (!firstResult || typeof firstResult.generated_text !== 'string') {
+        throw new Error('HuggingFace caption API response is missing generated text');
+      }
+
+      return firstResult.generated_text;
+    } catch (error) {
+      lastError = error;
+      const code = error && typeof error === 'object' && 'code' in error ? (error as any).code : undefined;
+      // API-level errors (bad response, model loading) are host-independent —
+      // don't waste a fallback attempt, surface them immediately.
+      const isNetworkError = Boolean(code) && ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(code);
+      if (!isNetworkError) {
+        const message = error && typeof error === 'object' && 'message' in error ? (error as any).message : String(error);
+        throw new Error(`HuggingFace request failed${code ? ` (${code})` : ''}: ${message}`);
+      }
+      console.warn(`[WARN] HuggingFace host ${host} failed${code ? ` (${code})` : ''}; trying next host if available.`);
     }
-
-    if (typeof response.data === 'object' && 'error' in response.data) {
-      throw new Error(`HuggingFace API error: ${response.data.error || 'Unknown error'}`);
-    }
-
-    if (!Array.isArray(response.data) || response.data.length === 0) {
-      throw new Error('Invalid response structure from HuggingFace caption API');
-    }
-
-    const firstResult = response.data[0];
-    if (!firstResult || typeof firstResult.generated_text !== 'string') {
-      throw new Error('HuggingFace caption API response is missing generated text');
-    }
-
-    return firstResult.generated_text;
-  } catch (error) {
-    // Surface DNS/network failures (e.g. ENOTFOUND) with a clear cause so the
-    // retry path can report it as a transient network error, not a code bug.
-    // axios sets `code` (e.g. ENOTFOUND) on the thrown error for network errors.
-    if (error && typeof error === 'object' && 'code' in error && (error as any).code) {
-      throw new Error(`HuggingFace request failed (${(error as any).code}): ${(error as any).message}`);
-    }
-    throw error;
   }
+
+  // All hosts failed — forward a clear network error for the retry/categorize path.
+  const code = lastError && typeof lastError === 'object' && 'code' in lastError ? (lastError as any).code : undefined;
+  throw new Error(
+    `HuggingFace request failed${code ? ` (${code})` : ''}: all inference hosts unreachable`,
+  );
 }
