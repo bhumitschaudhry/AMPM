@@ -43,6 +43,13 @@ export function categorizeError(error: unknown): CategorizedError {
 
   const status = (error as any).response?.status;
 
+  if (status === 401 || status === 403) {
+    return {
+      code: 'AI_PROVIDER_UNAUTHORIZED',
+      message: `AI service refused authentication (HTTP ${status}). Please check your HUGGINGFACE_API_TOKEN and ensure it has "Make calls to Inference Providers" permission enabled in Hugging Face settings.`,
+    };
+  }
+
   if (status === 429) {
     return {
       code: 'AI_PROVIDER_RATE_LIMITED',

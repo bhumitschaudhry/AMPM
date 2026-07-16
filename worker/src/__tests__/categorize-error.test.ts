@@ -22,6 +22,13 @@ describe('categorizeError', () => {
     expect(result.message).toContain('rate limited');
   });
 
+  it('returns AI_PROVIDER_UNAUTHORIZED for 403 status', () => {
+    const error = { response: { status: 403 }, message: 'forbidden' };
+    const result = categorizeError(error);
+    expect(result.code).toBe('AI_PROVIDER_UNAUTHORIZED');
+    expect(result.message).toContain('Make calls to Inference Providers');
+  });
+
   it('returns AI_PROVIDER_ERROR for 5xx status', () => {
     const error = { response: { status: 502 }, message: 'bad gateway' };
     const result = categorizeError(error);
