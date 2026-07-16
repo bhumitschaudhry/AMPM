@@ -31,6 +31,16 @@ function LoginCard({
 }: EmailFormProps) {
   const isAnyLoading = isLoading || isGoogleLoading;
 
+  const [buttonWidth, setButtonWidth] = React.useState<number>(360);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (containerRef.current) {
+      const width = Math.max(200, Math.min(400, containerRef.current.clientWidth || 360));
+      setButtonWidth(width);
+    }
+  }, []);
+
   return (
     <div className="auth-container">
       <div className="auth-card">
@@ -71,7 +81,18 @@ function LoginCard({
           </button>
         </form>
 
-        <div id="google-login-btn" style={{ marginTop: '1rem', opacity: isGoogleLoading ? 0.6 : 1 }}>
+        <div
+          ref={containerRef}
+          id="google-login-btn"
+          style={{
+            marginTop: '1rem',
+            opacity: isGoogleLoading ? 0.6 : 1,
+            display: 'flex',
+            justifyContent: 'center',
+            minHeight: '40px',
+            width: '100%',
+          }}
+        >
           {/* GoogleLogin renders Google's own branded button and returns credential (id_token). */}
           <GoogleLogin
             onSuccess={(response) => {
@@ -82,6 +103,7 @@ function LoginCard({
             onError={onGoogleError}
             useOneTap={false}
             text="continue_with"
+            width={buttonWidth}
           />
         </div>
 
