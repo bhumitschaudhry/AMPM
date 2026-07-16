@@ -67,7 +67,7 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
           'Content-Type': 'application/octet-stream',
           Connection: 'close',
         },
-        timeout: 30_000,
+        timeout: 90_000,
         httpsAgent: httpsAgentWithDnsFallback,
       });
 
