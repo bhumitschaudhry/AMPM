@@ -91,6 +91,18 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
       return firstResult.generated_text;
     } catch (error) {
       lastError = error;
+      
+      const responseStatus = error && typeof error === 'object' && 'response' in error ? (error as any).response?.status : undefined;
+      const responseData = error && typeof error === 'object' && 'response' in error ? (error as any).response?.data : undefined;
+      const isUnsupported = responseStatus === 400 &&
+        (typeof responseData === 'object' && responseData !== null &&
+         (responseData.error?.includes('not supported') || responseData.error?.includes('Model not supported')));
+
+      if (isUnsupported) {
+        console.warn('[WARN] HuggingFace model Salesforce/blip-image-captioning-base is decommissioned or unsupported. Returning fallback caption.');
+        return 'An uploaded image';
+      }
+
       const code = error && typeof error === 'object' && 'code' in error ? (error as any).code : undefined;
       // API-level errors (bad response, model loading) are host-independent —
       // don't waste a fallback attempt, surface them immediately.

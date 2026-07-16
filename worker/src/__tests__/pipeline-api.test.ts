@@ -228,4 +228,17 @@ describe("generateCaption", () => {
       "Invalid response structure from HuggingFace caption API"
     );
   });
+
+  it("returns fallback caption when HuggingFace returns 400 Model not supported", async () => {
+    const mockError = new Error("Request failed with status code 400");
+    (mockError as any).response = {
+      status: 400,
+      data: { error: "Model not supported by provider hf-inference" }
+    };
+    (axios.post as any).mockRejectedValue(mockError);
+
+    const { generateCaption } = await import("../pipeline/generate-caption");
+    const caption = await generateCaption(Buffer.from("test"));
+    expect(caption).toBe("An uploaded image");
+  });
 });
