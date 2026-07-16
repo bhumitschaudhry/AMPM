@@ -37,6 +37,11 @@ export const worker: Worker = new Worker(QUEUE_NAME, processImage, {
   concurrency: CONCURRENCY,
 });
 
+// Surface connection failures so Fly logs explain why the worker exits.
+worker.on('error', (error) => {
+  console.error('[FATAL] Worker connection error:', error);
+});
+
 worker.on('completed', (job) => {
   console.log(`[COMPLETED] Job ${job.id} — image ${job.data.imageId} processed successfully.`);
 });

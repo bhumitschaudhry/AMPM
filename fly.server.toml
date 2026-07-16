@@ -8,6 +8,9 @@ primary_region = "bom"
   NODE_ENV = "production"
   PORT = "3001"
 
+[deploy]
+  release_command = "sh -c 'DATABASE_URL=\"${DIRECT_DATABASE_URL:-$DATABASE_URL}\" npx prisma migrate deploy'"
+
 [http_service]
   internal_port = 3001
   force_https = true

@@ -9,11 +9,9 @@ async function shutdown() {
   process.exit(0);
 }
 
-// Log unhandled rejections (e.g. Redis connection failures) before Node exits.
-// Without this the process silently exits with code 1 and the error is invisible in logs.
+// Keep transient Redis or queue failures visible while BullMQ reconnects.
 process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection — worker is shutting down:', reason);
-  process.exit(1);
+  console.error('[ERROR] Unhandled worker rejection; BullMQ will continue retrying:', reason);
 });
 
 process.on('SIGTERM', shutdown);
