@@ -147,17 +147,6 @@ a:hover {
   position: relative;
 }
 
-.auth-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: var(--primary-gradient);
-  border-radius: 16px 16px 0 0;
-}
-
 .brand-title {
   font-size: 2.5rem;
   font-family: var(--font-heading);
@@ -660,26 +649,10 @@ a:hover {
   position: relative;
 }
 
-.job-card::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 3px;
-  background: transparent;
-  border-radius: 12px 0 0 12px;
-  transition: var(--transition-smooth);
-}
-
 .job-card:hover {
   border-color: var(--border-hover);
   transform: translateY(-1px);
   box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(0, 0, 0, 0.01);
-}
-
-.job-card:hover::after {
-  background: var(--primary-color);
 }
 
 .job-card-header {
