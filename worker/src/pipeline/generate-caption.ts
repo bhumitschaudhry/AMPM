@@ -1,11 +1,51 @@
 import axios from 'axios';
+import dns from 'dns';
 
 const HUGGINGFACE_CAPTION_URL =
   'https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base';
 
+// Public fallback resolvers used when the system resolver transiently fails
+// (e.g. intermittent `ENOTFOUND` for api-inference.huggingface.co).
+const FALLBACK_DNS_SERVERS = ['8.8.8.8', '1.1.1.1'];
+const DNS_RESOLVE_ATTEMPTS = 3;
+
+/**
+ * Best-effort warm-up of the HuggingFace host DNS using the system resolver,
+ * retrying with public fallback DNS servers. This absorbs transient DNS
+ * failures (ENOTFOUND) by pre-populating the resolver cache, but it never blocks
+ * the request: if every attempt fails we still let axios attempt the call
+ * (which performs its own resolution). Kept non-fatal so the real failure mode
+ * (and BullMQ retry) is driven by the actual request, not the warm-up.
+ */
+async function warmDnsResolution(): Promise<void> {
+  const host = new URL(HUGGINGFACE_CAPTION_URL).hostname;
+  const servers = [undefined, ...FALLBACK_DNS_SERVERS];
+
+  for (let attempt = 0; attempt < DNS_RESOLVE_ATTEMPTS; attempt++) {
+    for (const server of servers) {
+      const resolver = server ? new dns.Resolver({ timeout: 3000 }) : dns;
+      if (server) resolver.setServers([server]);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          resolver.resolve4(host, (err) => (err ? reject(err) : resolve()));
+        });
+        return; // resolved successfully — warm cache and proceed
+      } catch {
+        // try next resolver / attempt
+      }
+    }
+  }
+
+  // Non-fatal: log and let the real axios call surface the network error.
+  console.warn(`[WARN] Could not pre-resolve ${host}; proceeding with request anyway.`);
+}
+
 /** Send image to HuggingFace BLIP model and return the generated caption. */
 export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   try {
+    // Stabilize DNS before the request: transient ENOTFOUND must not exhaust retries.
+    await warmDnsResolution();
+
     const response = await axios.post(HUGGINGFACE_CAPTION_URL, imageBuffer, {
       headers: {
         Authorization: `Bearer ${process.env.HUGGINGFACE_API_TOKEN}`,
