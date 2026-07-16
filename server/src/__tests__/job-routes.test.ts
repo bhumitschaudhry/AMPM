@@ -50,4 +50,11 @@ describe("jobRouter", () => {
     expect(route).toBeDefined();
     expect(route.route.methods).toEqual({ post: true });
   });
+
+  it("has POST /:jobId/retry route", () => {
+    const stack = (jobRouter as any).stack;
+    const route = stack.find((l: any) => l.route?.path === "/:jobId/retry");
+    expect(route).toBeDefined();
+    expect(route.route.methods).toEqual({ post: true });
+  });
 });

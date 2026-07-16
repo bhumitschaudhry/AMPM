@@ -10,6 +10,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState<Record<string, boolean>>({});
+  const [isRetryingAll, setIsRetryingAll] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -61,6 +62,25 @@ export default function JobDetailPage() {
     }
   }
 
+  async function handleRetryAllFailed() {
+    if (!jobId) return;
+    setIsRetryingAll(true);
+    try {
+      const response = await api.post(`/jobs/${jobId}/retry`);
+      if (job) {
+        const updatedImagesMap = new Map(response.data.images.map((img: any) => [img.id, img]));
+        const updatedImages = job.images.map((img) =>
+          updatedImagesMap.has(img.id) ? (updatedImagesMap.get(img.id) as Image) : img
+        );
+        setJob({ ...job, images: updatedImages });
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to retry failed images.');
+    } finally {
+      setIsRetryingAll(false);
+    }
+  }
+
   if (error) {
     return (
       <div className="detail-container">
@@ -92,7 +112,16 @@ export default function JobDetailPage() {
           <h2>Job Details</h2>
           <span className="job-id-text">#{job.id}</span>
         </div>
-        <div className="job-status-summary">
+        <div className="job-status-summary" style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {job.images.some((img) => img.status === 'FAILED') && (
+            <button
+              className="btn btn-primary btn-sm btn-retry-all"
+              onClick={handleRetryAllFailed}
+              disabled={isRetryingAll}
+            >
+              {isRetryingAll ? 'Retrying Failed...' : 'Retry Failed Images'}
+            </button>
+          )}
           <span className={`status-badge status-${job.status.toLowerCase()}`}>
             {job.status.replace('_', ' ')}
           </span>

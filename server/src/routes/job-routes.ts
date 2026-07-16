@@ -226,6 +226,55 @@ jobRouter.post(
   }
 );
 
+/** POST /:jobId/retry — re-enqueue all failed images in a job. */
+jobRouter.post(
+  "/:jobId/retry",
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const jobId = req.params.jobId as string;
+      const job = await prisma.job.findFirst({
+        where: { id: jobId, userId: req.userId },
+        include: { images: true },
+      });
+
+      if (!job) {
+        throw createHttpError(404, "Job not found.");
+      }
+
+      const failedImages = job.images.filter((img) => img.status === "FAILED");
+      if (failedImages.length === 0) {
+        throw createHttpError(400, "No failed images to retry in this job.");
+      }
+
+      const updatedImages = await prisma.$transaction(
+        failedImages.map((img) =>
+          prisma.image.update({
+            where: { id: img.id },
+            data: { status: "PENDING", failureReason: null, failureMessage: null },
+          })
+        )
+      );
+
+      await Promise.all(
+        updatedImages.map((img) =>
+          imageQueue.add("process-image", {
+            imageId: img.id,
+            jobId: img.jobId,
+            storedPath: img.storedPath,
+          })
+        )
+      );
+
+      res.json({
+        message: `Successfully enqueued ${updatedImages.length} failed images for retry.`,
+        images: updatedImages,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 /** Convert multer error into an HTTP error with a clear message. */
 function handleMulterError(error: Error): Error & { statusCode: number } {
   if (error instanceof multer.MulterError) {
