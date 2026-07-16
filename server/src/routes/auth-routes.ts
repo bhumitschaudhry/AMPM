@@ -110,10 +110,17 @@ authRouter.post("/google", async (req: Request, res: Response, next: NextFunctio
       throw createHttpError(400, "idToken is required and must be a string.");
     }
 
-    const ticket = await googleClient.verifyIdToken({
-      idToken,
-      audience: process.env.GOOGLE_CLIENT_ID,
-    });
+    let ticket;
+    try {
+      ticket = await googleClient.verifyIdToken({
+        idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+    } catch {
+      // Verification failures (bad/expired token, audience mismatch, Google
+      // unreachable) are client-facing problems — never a generic 500.
+      throw createHttpError(401, "Google sign-in failed. The token could not be verified.");
+    }
 
     const payload = ticket.getPayload();
     if (!payload) {
