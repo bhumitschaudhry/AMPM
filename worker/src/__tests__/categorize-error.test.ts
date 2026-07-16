@@ -29,6 +29,25 @@ describe('categorizeError', () => {
     expect(result.message).toContain('502');
   });
 
+  it('returns NETWORK_ERROR for DNS resolution failure (ENOTFOUND)', () => {
+    const error = { code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND api-inference.huggingface.co' };
+    const result = categorizeError(error);
+    expect(result.code).toBe('NETWORK_ERROR');
+    expect(result.message).toContain('network or DNS');
+  });
+
+  it('returns NETWORK_ERROR for EAI_AGAIN', () => {
+    const error = { code: 'EAI_AGAIN', message: 'temporary failure in name resolution' };
+    const result = categorizeError(error);
+    expect(result.code).toBe('NETWORK_ERROR');
+  });
+
+  it('returns NETWORK_ERROR for connection refused', () => {
+    const error = { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED' };
+    const result = categorizeError(error);
+    expect(result.code).toBe('NETWORK_ERROR');
+  });
+
   it('returns INVALID_FILE for ENOENT', () => {
     const error = { code: 'ENOENT', message: 'file not found' };
     const result = categorizeError(error);

@@ -23,6 +23,24 @@ export function categorizeError(error: unknown): CategorizedError {
     };
   }
 
+  // DNS resolution and connection failures are transient network errors —
+  // e.g. `getaddrinfo ENOTFOUND api-inference.huggingface.co`. These are
+  // retryable and must be reported clearly rather than as a generic
+  // INTERNAL_ERROR so the user knows it's a network issue, not a bad upload.
+  if (
+    error.code === 'ENOTFOUND' ||
+    error.code === 'EAI_AGAIN' ||
+    error.code === 'ECONNREFUSED' ||
+    error.code === 'ENETUNREACH' ||
+    error.code === 'ECONNRESET' ||
+    error.message?.includes('getaddrinfo')
+  ) {
+    return {
+      code: 'NETWORK_ERROR',
+      message: 'Could not reach the AI service due to a network or DNS error. This is temporary — retries will continue.',
+    };
+  }
+
   const status = (error as any).response?.status;
 
   if (status === 429) {
