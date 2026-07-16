@@ -13,6 +13,28 @@ export default function JobDetailPage() {
   const [isRetryingAll, setIsRetryingAll] = useState(false);
   const navigate = useNavigate();
 
+  const renderFailureMessage = (message: string | null) => {
+    if (!message) return null;
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = message.split(urlRegex);
+    return parts.map((part, index) => {
+      if (urlRegex.test(part)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--color-primary)', textDecoration: 'underline', wordBreak: 'break-all' }}
+          >
+            {part}
+          </a>
+        );
+      }
+      return part;
+    });
+  };
+
   useEffect(() => {
     if (!jobId) return;
 
@@ -177,7 +199,7 @@ export default function JobDetailPage() {
                       <div className="failure-reason-code">
                         <strong>Reason:</strong> {img.failureReason}
                       </div>
-                      <div className="failure-message">{img.failureMessage}</div>
+                      <div className="failure-message">{renderFailureMessage(img.failureMessage)}</div>
                       <button
                         className="btn btn-primary btn-sm btn-retry"
                         onClick={() => handleRetry(img.id)}
