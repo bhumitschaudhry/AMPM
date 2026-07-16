@@ -29,6 +29,27 @@ describe('categorizeError', () => {
     expect(result.message).toContain('Make calls to Inference Providers');
   });
 
+  it('returns GOOGLE_VISION_API_ERROR for Google Vision 403 status', () => {
+    const error = {
+      response: {
+        status: 403,
+        data: {
+          error: {
+            message: 'Billing not enabled'
+          }
+        }
+      },
+      config: {
+        url: 'https://vision.googleapis.com/v1/images:annotate'
+      },
+      message: 'forbidden'
+    };
+    const result = categorizeError(error);
+    expect(result.code).toBe('GOOGLE_VISION_API_ERROR');
+    expect(result.message).toContain('Google Cloud Vision API refused');
+    expect(result.message).toContain('Billing not enabled');
+  });
+
   it('returns AI_PROVIDER_ERROR for 5xx status', () => {
     const error = { response: { status: 502 }, message: 'bad gateway' };
     const result = categorizeError(error);

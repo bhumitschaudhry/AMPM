@@ -42,8 +42,18 @@ export function categorizeError(error: unknown): CategorizedError {
   }
 
   const status = (error as any).response?.status;
+  const url = (error as any).config?.url;
+  const isGoogleVision = typeof url === 'string' && url.includes('googleapis.com');
 
   if (status === 401 || status === 403) {
+    if (isGoogleVision) {
+      const responseData = (error as any).response?.data;
+      const apiMessage = responseData?.error?.message || 'Permission denied or billing required.';
+      return {
+        code: 'GOOGLE_VISION_API_ERROR',
+        message: `Google Cloud Vision API refused authentication/access (HTTP ${status}): ${apiMessage}`,
+      };
+    }
     return {
       code: 'AI_PROVIDER_UNAUTHORIZED',
       message: `AI service refused authentication (HTTP ${status}). Please check your HUGGINGFACE_API_TOKEN and ensure it has "Make calls to Inference Providers" permission enabled in Hugging Face settings.`,
