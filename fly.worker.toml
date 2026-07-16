@@ -7,5 +7,12 @@ primary_region = "bom"
 [env]
   NODE_ENV = "production"
 
+# Workers are persistent BullMQ consumers — they must stay running at all times.
+# Without auto_stop_machines = "off", Fly has no trigger to keep this machine alive
+# since there is no HTTP service. min_machines_running ensures one is always up.
+[machines]
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
 [[vm]]
   memory = "1024mb"

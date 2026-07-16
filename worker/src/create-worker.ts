@@ -23,7 +23,8 @@ function createRedisConnection() {
     port: Number(parsedUrl.port || 6379),
     username: parsedUrl.username || undefined,
     password: parsedUrl.password || undefined,
-    ...(parsedUrl.protocol === 'rediss:' ? { tls: {} } : {}),
+    // Upstash uses TLS but its cert may not pass strict verification in all Node versions.
+    ...(parsedUrl.protocol === 'rediss:' ? { tls: { rejectUnauthorized: false } } : {}),
     maxRetriesPerRequest: null as null,
   };
 }

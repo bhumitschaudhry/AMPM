@@ -9,5 +9,12 @@ async function shutdown() {
   process.exit(0);
 }
 
+// Log unhandled rejections (e.g. Redis connection failures) before Node exits.
+// Without this the process silently exits with code 1 and the error is invisible in logs.
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection — worker is shutting down:', reason);
+  process.exit(1);
+});
+
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
