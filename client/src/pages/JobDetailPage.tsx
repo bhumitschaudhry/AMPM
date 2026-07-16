@@ -56,7 +56,9 @@ export default function JobDetailPage() {
         setJob({ ...job, images: updatedImages });
       }
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to retry image processing.');
+      console.error('Individual retry error:', err);
+      const errMsg = err.response?.data?.error || err.response?.statusText || err.message || 'Failed to retry image processing.';
+      alert(errMsg);
     } finally {
       setIsRetrying((prev) => ({ ...prev, [imageId]: false }));
     }
@@ -75,7 +77,9 @@ export default function JobDetailPage() {
         setJob({ ...job, images: updatedImages });
       }
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Failed to retry failed images.');
+      console.error('Batch retry error:', err);
+      const errMsg = err.response?.data?.error || err.response?.statusText || err.message || 'Failed to retry failed images.';
+      alert(errMsg);
     } finally {
       setIsRetryingAll(false);
     }
