@@ -1,6 +1,7 @@
 import axios from 'axios';
 import dns from 'dns';
 import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
+import { recordAiTokenAnalysis } from '../telemetry';
 
 // HuggingFace inference hosts, tried in order. The canonical api-inference
 // subdomain has been observed returning ENOTFOUND during DNS outages, so the
@@ -54,6 +55,8 @@ async function warmDnsResolution(host: string): Promise<void> {
 /** Send image to HuggingFace BLIP model and return the generated caption. */
 export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   let lastError: unknown;
+  const startTime = Date.now();
+  const promptTokens = Math.max(1, Math.ceil(imageBuffer.length / 1024));
 
   // Try each HuggingFace host in turn so a DNS/network outage on one endpoint
   // (e.g. api-inference.huggingface.co ENOTFOUND) falls through to the next.
@@ -88,7 +91,18 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
         throw new Error('HuggingFace caption API response is missing generated text');
       }
 
-      return firstResult.generated_text;
+      const caption = firstResult.generated_text;
+      const completionTokens = caption.trim().split(/\s+/).filter(Boolean).length;
+      recordAiTokenAnalysis({
+        provider: 'huggingface',
+        model: 'Salesforce/blip-image-captioning-base',
+        task: 'captioning',
+        promptTokens,
+        completionTokens,
+        durationMs: Date.now() - startTime,
+        isSuccess: true,
+      });
+      return caption;
     } catch (error) {
       lastError = error;
       
@@ -100,6 +114,15 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
 
       if (isUnsupported) {
         console.warn('[WARN] HuggingFace model Salesforce/blip-image-captioning-base is decommissioned or unsupported. Returning fallback caption.');
+        recordAiTokenAnalysis({
+          provider: 'huggingface',
+          model: 'Salesforce/blip-image-captioning-base',
+          task: 'captioning',
+          promptTokens,
+          completionTokens: 3,
+          durationMs: Date.now() - startTime,
+          isSuccess: true,
+        });
         return 'An uploaded image';
       }
 
@@ -108,6 +131,15 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
       // don't waste a fallback attempt, surface them immediately.
       const isNetworkError = Boolean(code) && ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(code);
       if (!isNetworkError) {
+        recordAiTokenAnalysis({
+          provider: 'huggingface',
+          model: 'Salesforce/blip-image-captioning-base',
+          task: 'captioning',
+          promptTokens,
+          completionTokens: 0,
+          durationMs: Date.now() - startTime,
+          isSuccess: false,
+        });
         const message = error && typeof error === 'object' && 'message' in error ? (error as any).message : String(error);
         throw new Error(`HuggingFace request failed${code ? ` (${code})` : ''}: ${message}`);
       }
@@ -116,6 +148,16 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   }
 
   // All hosts failed — forward a clear network error for the retry/categorize path.
+  recordAiTokenAnalysis({
+    provider: 'huggingface',
+    model: 'Salesforce/blip-image-captioning-base',
+    task: 'captioning',
+    promptTokens,
+    completionTokens: 0,
+    durationMs: Date.now() - startTime,
+    isSuccess: false,
+  });
+
   const code = lastError && typeof lastError === 'object' && 'code' in lastError ? (lastError as any).code : undefined;
   const finalError = new Error(
     `HuggingFace request failed${code ? ` (${code})` : ''}: all inference hosts unreachable`,
@@ -125,3 +167,4 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   }
   throw finalError;
 }
+

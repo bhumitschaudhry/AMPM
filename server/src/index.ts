@@ -1,3 +1,4 @@
+import "./telemetry";
 import dotenv from "dotenv";
 dotenv.config();
 

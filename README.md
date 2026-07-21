@@ -11,6 +11,8 @@ AMPM is an asynchronous media processing service built on the PERN stack. It acc
 - **Secure Authentication**: Built-in email/password credentials and native Google OAuth (Google Sign-In) with access/refresh token rotation.
 - **Safety Flags & Alerts**: Automatically flags unsafe uploads and sends in-app notifications to users.
 - **Granular Control**: View detailed processing reports per image and trigger individual failed-image retries directly from the UI.
+- **SigNoz Monitoring & Token Analysis**: Full OpenTelemetry instrumentation exporting traces, metrics, and token analysis (AI model token usage, completion metrics, and JWT authentication token metrics) to SigNoz.
+
 
 ---
 
@@ -54,3 +56,4 @@ For detailed guides, specifications, and reference manuals, please see:
 - 🚀 **[Deployment Guide](file:///E:/AMPM/deployment_guide.md)**: Deploying production resources (Neon, Upstash, Cloudflare R2, Cloudflare Pages, and Fly.io).
 - 📝 **[Decisions & Limitations](file:///E:/AMPM/docs/limitations_and_assumptions.md)**: Key design decisions, core assumptions, and production scaling recommendations.
 - 🪵 **[ADR 0001: Architecture Decisions](file:///E:/AMPM/docs/adr/0001-architecture-decisions.md)**: Logs of architectural decisions to prevent state drift.
+- 🧪 **[Integration Testing](file:///E:/AMPM/docs/integration_testing.md)**: Testing patterns, mocking conventions, and examples across all packages.

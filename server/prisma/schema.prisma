@@ -40,6 +40,7 @@ model Image {
   storedPath      String       @map("stored_path")
   mimeType        String       @map("mime_type")
   fileSize        Int          @map("file_size")
+  contentHash     String       @map("content_hash")
   status          ImageStatus  @default(PENDING)
   retryCount      Int          @default(0) @map("retry_count")
   failureReason   String?      @map("failure_reason")

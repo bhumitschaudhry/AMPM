@@ -41,6 +41,9 @@ services:
       JWT_REFRESH_EXPIRES_IN: 7d
       GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
+      # SigNoz / OpenTelemetry monitoring configuration
+      OTEL_SERVICE_NAME: ampm-server
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4318}
       # CLERK DISABLED — uncomment to re-enable Google OAuth via Clerk
       # CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
       MAX_FILE_SIZE_MB: 5
@@ -56,6 +59,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      signoz-otel-collector:
+        condition: service_started
 
   worker:
     build:
@@ -67,6 +72,9 @@ services:
       REDIS_PORT: 6379
       GOOGLE_CLOUD_VISION_API_KEY: ${GOOGLE_CLOUD_VISION_API_KEY}
       HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN}
+      # SigNoz / OpenTelemetry monitoring configuration
+      OTEL_SERVICE_NAME: ampm-worker
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://signoz-otel-collector:4318}
       MAX_FILE_SIZE_MB: 5
       MAX_RETRIES: 3
       RETRY_DELAY_MS: 5000
@@ -80,6 +88,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      signoz-otel-collector:
+        condition: service_started
 
   client:
     build:
@@ -93,5 +103,16 @@ services:
     depends_on:
       - server
 
+  signoz-otel-collector:
+    image: signoz/signoz-otel-collector:0.110.0
+    container_name: ampm-signoz-otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+
 volumes:
   pgdata:
+

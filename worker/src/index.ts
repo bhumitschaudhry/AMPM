@@ -1,3 +1,4 @@
+import './telemetry';
 import 'dotenv/config';
 import { worker } from './create-worker';
 
