@@ -1,24 +1,25 @@
-import { Router, Request, Response, NextFunction } from "express";
-import multer from "multer";
-import crypto from "crypto";
-import path from "path";
-import prisma from "../db";
-import { imageQueue } from "../queue";
-import { deriveJobStatus } from "../constants";
-import { authenticateToken } from "../middleware/auth-middleware";
-import { upload } from "../middleware/upload-middleware";
-import { uploadRateLimiter, retryRateLimiter } from "../middleware/rate-limiter";
-import { validateUuid } from "../middleware/validate-uuid";
-import { createHttpError } from "../helpers/create-error";
-import { uploadToR2, downloadFromR2 } from "../storage/r2-client";
-import { sanitizeFilename } from "../helpers/sanitize-filename";
+import crypto from 'node:crypto';
+import path from 'node:path';
+import type { Prisma } from '@prisma/client';
+import { type NextFunction, type Request, type Response, Router } from 'express';
+import multer from 'multer';
+import { deriveJobStatus } from '../constants';
+import prisma from '../db';
+import { createHttpError } from '../helpers/create-error';
+import { sanitizeFilename } from '../helpers/sanitize-filename';
+import { authenticateToken } from '../middleware/auth-middleware';
+import { retryRateLimiter, uploadRateLimiter } from '../middleware/rate-limiter';
+import { upload } from '../middleware/upload-middleware';
+import { validateUuid } from '../middleware/validate-uuid';
+import { imageQueue } from '../queue';
+import { deleteFromR2, downloadFromR2, uploadToR2 } from '../storage/r2-client';
 
 export const jobRouter = Router();
 jobRouter.use(authenticateToken);
 
 /** POST / — create a job and enqueue uploaded images for processing. */
-jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextFunction) => {
-  upload.array("images", 10)(req, res, async (multerError) => {
+jobRouter.post('/', uploadRateLimiter, (req: Request, res: Response, next: NextFunction) => {
+  upload.array('images', 10)(req, res, async (multerError) => {
     try {
       if (multerError) {
         throw handleMulterError(multerError);
@@ -26,12 +27,12 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
 
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) {
-        throw createHttpError(400, "At least one image file is required.");
+        throw createHttpError(400, 'At least one image file is required.');
       }
 
       // Generate content hashes for duplicate detection
       const contentHashes = files.map((file) =>
-        crypto.createHash("sha256").update(file.buffer).digest("hex")
+        crypto.createHash('sha256').update(file.buffer).digest('hex'),
       );
 
       // Sanitize filenames to prevent XSS and path traversal
@@ -47,17 +48,17 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
       });
 
       // Create a map of hash to existing image for quick lookup, prioritizing COMPLETED images
-      const existingHashMap = new Map<string, typeof existingImages[0]>();
+      const existingHashMap = new Map<string, (typeof existingImages)[0]>();
       for (const img of existingImages) {
         const current = existingHashMap.get(img.contentHash);
-        if (!current || (current.status !== "COMPLETED" && img.status === "COMPLETED")) {
+        if (!current || (current.status !== 'COMPLETED' && img.status === 'COMPLETED')) {
           existingHashMap.set(img.contentHash, img);
         }
       }
 
       // Track the first appearance index of each hash in this request
       const firstAppearanceIndex = new Map<string, number>();
-      files.forEach((file, index) => {
+      files.forEach((_file, index) => {
         const hash = contentHashes[index];
         if (!firstAppearanceIndex.has(hash)) {
           firstAppearanceIndex.set(hash, index);
@@ -91,7 +92,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
             const ext = path.extname(file.originalname).toLowerCase();
             const key = `uploads/${crypto.randomUUID()}${ext}`;
             return uploadToR2(key, file.buffer, file.mimetype);
-          })
+          }),
         );
         newUniqueFiles.forEach(({ hash }, i) => {
           r2Keys.set(hash, uploadResults[i]);
@@ -101,6 +102,23 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
 
       // Create the Job + Image rows atomically
       const { job, images } = await prisma.$transaction(async (tx) => {
+        // Re-check for existing images inside the transaction to prevent race conditions
+        // where two concurrent requests both see no existing image and both upload
+        const freshExisting = await tx.image.findMany({
+          where: {
+            contentHash: { in: contentHashes },
+            job: { userId: req.userId! },
+          },
+          include: { job: true },
+        });
+
+        // Update existingHashMap if any new duplicates were created by concurrent requests
+        for (const img of freshExisting) {
+          if (!existingHashMap.has(img.contentHash)) {
+            existingHashMap.set(img.contentHash, img);
+          }
+        }
+
         const created = await tx.job.create({ data: { userId: req.userId! } });
 
         const createdImages = await Promise.all(
@@ -121,11 +139,11 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
                   contentHash: hash,
                   // Copy AI results from existing image if available
                   caption: existing.caption,
-                  labels: existing.labels as any,
-                  safetyResult: existing.safetyResult as any,
+                  labels: existing.labels as Prisma.InputJsonValue,
+                  safetyResult: existing.safetyResult as Prisma.InputJsonValue,
                   isFlagged: existing.isFlagged,
                   flaggedCategory: existing.flaggedCategory,
-                  status: existing.status === "COMPLETED" ? "COMPLETED" : existing.status,
+                  status: existing.status === 'COMPLETED' ? 'COMPLETED' : existing.status,
                 },
               });
             }
@@ -141,7 +159,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
                   mimeType: file.mimetype,
                   fileSize: file.size,
                   contentHash: hash,
-                  status: "PENDING",
+                  status: 'PENDING',
                 },
               });
             }
@@ -155,14 +173,30 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
                 mimeType: file.mimetype,
                 fileSize: file.size,
                 contentHash: hash,
-                status: "PENDING",
+                status: 'PENDING',
               },
             });
-          })
+          }),
         );
 
         return { job: created, images: createdImages };
       });
+
+      // Clean up orphaned R2 uploads from race condition
+      // If the transaction found an existing image for a hash we just uploaded, delete our duplicate upload
+      const orphanedKeys: string[] = [];
+      for (const [hash, uploadedKey] of r2Keys.entries()) {
+        const existing = existingHashMap.get(hash);
+        if (existing && existing.storedPath !== uploadedKey) {
+          orphanedKeys.push(uploadedKey);
+        }
+      }
+      if (orphanedKeys.length > 0) {
+        // Delete orphaned uploads in background (don't block response)
+        Promise.all(orphanedKeys.map((key) => deleteFromR2(key))).catch((err) => {
+          console.error('Failed to delete orphaned R2 uploads:', err);
+        });
+      }
 
       // Enqueue only new images for processing (skip duplicates that are completed or active)
       const imagesToProcess = images.filter((img) => {
@@ -172,7 +206,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
 
         // If there's an existing image, only process if the previous run FAILED
         if (existing) {
-          return existing.status === "FAILED";
+          return existing.status === 'FAILED';
         }
 
         // If no existing image in DB, only enqueue the first occurrence in this request
@@ -184,12 +218,12 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
         try {
           await Promise.all(
             imagesToProcess.map((img) =>
-              imageQueue.add("process-image", {
+              imageQueue.add('process-image', {
                 imageId: img.id,
                 jobId: img.jobId,
                 storedPath: img.storedPath,
-              })
-            )
+              }),
+            ),
           );
         } catch (enqueueError) {
           // Roll back the DB writes so no orphaned PENDING images are left behind.
@@ -202,7 +236,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
         job: {
           id: job.id,
           createdAt: job.createdAt,
-          status: "pending",
+          status: 'pending',
           images: images.map((img, i) => {
             const hash = contentHashes[i];
             const isDuplicate = existingHashMap.has(hash) || firstAppearanceIndex.get(hash)! < i;
@@ -222,12 +256,12 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
 });
 
 /** GET / — list all jobs for the authenticated user. */
-jobRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
+jobRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const jobs = await prisma.job.findMany({
       where: { userId: req.userId },
       include: { images: true },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
     });
 
     const jobSummaries = jobs.map((job) => {
@@ -255,8 +289,8 @@ jobRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
 
 /** GET /:jobId/images/:imageId/file — stream an owned image from R2. */
 jobRouter.get(
-  "/:jobId/images/:imageId/file",
-  validateUuid("jobId", "imageId"),
+  '/:jobId/images/:imageId/file',
+  validateUuid('jobId', 'imageId'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const image = await prisma.image.findFirst({
@@ -268,7 +302,7 @@ jobRouter.get(
       });
 
       if (!image) {
-        throw createHttpError(404, "Image not found.");
+        throw createHttpError(404, 'Image not found.');
       }
 
       // storedPath is now an R2 object key (e.g. "uploads/<uuid>.jpg")
@@ -277,13 +311,13 @@ jobRouter.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 /** GET /:jobId — full job detail with all image fields. */
 jobRouter.get(
-  "/:jobId",
-  validateUuid("jobId"),
+  '/:jobId',
+  validateUuid('jobId'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const jobId = req.params.jobId as string;
@@ -293,7 +327,7 @@ jobRouter.get(
       });
 
       if (!job) {
-        throw createHttpError(404, "Job not found.");
+        throw createHttpError(404, 'Job not found.');
       }
 
       const imageStatuses = job.images.map((img) => img.status);
@@ -321,13 +355,13 @@ jobRouter.get(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 /** POST /:jobId/images/:imageId/retry — re-enqueue a failed image. */
 jobRouter.post(
-  "/:jobId/images/:imageId/retry",
-  validateUuid("jobId", "imageId"),
+  '/:jobId/images/:imageId/retry',
+  validateUuid('jobId', 'imageId'),
   retryRateLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -338,18 +372,18 @@ jobRouter.post(
       });
 
       if (!image) {
-        throw createHttpError(404, "Image not found.");
+        throw createHttpError(404, 'Image not found.');
       }
-      if (image.status !== "FAILED") {
-        throw createHttpError(400, "Only failed images can be retried.");
+      if (image.status !== 'FAILED') {
+        throw createHttpError(400, 'Only failed images can be retried.');
       }
 
       const updated = await prisma.image.update({
         where: { id: image.id },
-        data: { status: "PENDING", failureReason: null, failureMessage: null },
+        data: { status: 'PENDING', failureReason: null, failureMessage: null },
       });
 
-      await imageQueue.add("process-image", {
+      await imageQueue.add('process-image', {
         imageId: updated.id,
         jobId: updated.jobId,
         storedPath: updated.storedPath,
@@ -359,13 +393,13 @@ jobRouter.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 /** POST /:jobId/retry — re-enqueue all failed images in a job. */
 jobRouter.post(
-  "/:jobId/retry",
-  validateUuid("jobId"),
+  '/:jobId/retry',
+  validateUuid('jobId'),
   retryRateLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -376,31 +410,31 @@ jobRouter.post(
       });
 
       if (!job) {
-        throw createHttpError(404, "Job not found.");
+        throw createHttpError(404, 'Job not found.');
       }
 
-      const failedImages = job.images.filter((img) => img.status === "FAILED");
+      const failedImages = job.images.filter((img) => img.status === 'FAILED');
       if (failedImages.length === 0) {
-        throw createHttpError(400, "No failed images to retry in this job.");
+        throw createHttpError(400, 'No failed images to retry in this job.');
       }
 
       const updatedImages = await prisma.$transaction(
         failedImages.map((img) =>
           prisma.image.update({
             where: { id: img.id },
-            data: { status: "PENDING", failureReason: null, failureMessage: null },
-          })
-        )
+            data: { status: 'PENDING', failureReason: null, failureMessage: null },
+          }),
+        ),
       );
 
       await Promise.all(
         updatedImages.map((img) =>
-          imageQueue.add("process-image", {
+          imageQueue.add('process-image', {
             imageId: img.id,
             jobId: img.jobId,
             storedPath: img.storedPath,
-          })
-        )
+          }),
+        ),
       );
 
       res.json({
@@ -410,17 +444,17 @@ jobRouter.post(
     } catch (error) {
       next(error);
     }
-  }
+  },
 );
 
 /** Convert multer error into an HTTP error with a clear message. */
 function handleMulterError(error: Error): Error & { statusCode: number } {
   if (error instanceof multer.MulterError) {
-    if (error.code === "LIMIT_FILE_SIZE") {
-      return createHttpError(413, "File exceeds the 5MB size limit.");
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return createHttpError(413, 'File exceeds the 5MB size limit.');
     }
-    if (error.code === "LIMIT_UNEXPECTED_FILE") {
-      return createHttpError(400, "Too many files. Maximum 10 images allowed per job.");
+    if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+      return createHttpError(400, 'Too many files. Maximum 10 images allowed per job.');
     }
     return createHttpError(400, `Upload error: ${error.message}`);
   }

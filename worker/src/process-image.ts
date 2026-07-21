@@ -1,11 +1,11 @@
-import { Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import sharp from 'sharp';
 import prisma from './db';
-import { downloadFromR2 } from './storage/r2-client';
-import { generateCaption } from './pipeline/generate-caption';
-import { detectLabels } from './pipeline/detect-labels';
-import { checkContentSafety } from './pipeline/check-content-safety';
 import { categorizeError } from './pipeline/categorize-error';
+import { checkContentSafety } from './pipeline/check-content-safety';
+import { detectLabels } from './pipeline/detect-labels';
+import { generateCaption } from './pipeline/generate-caption';
+import { downloadFromR2 } from './storage/r2-client';
 
 interface ImageJobData {
   imageId: string;
@@ -16,9 +16,13 @@ interface ImageJobData {
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // ponytail: MAX_FILE_SIZE_MB is the real source of truth (docker-compose sets it); the
 // previously-hardcoded 5MB constant ignored the env var. Server derives the same way.
-const MAX_FILE_SIZE_MB = parseInt(process.env.MAX_FILE_SIZE_MB || '5', 10);
+const MAX_FILE_SIZE_MB = Number.parseInt(process.env.MAX_FILE_SIZE_MB || '5', 10);
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
-const NON_RETRYABLE_FAILURE_REASONS = new Set(['INVALID_FILE', 'UNSUPPORTED_FORMAT', 'FILE_TOO_LARGE']);
+const NON_RETRYABLE_FAILURE_REASONS = new Set([
+  'INVALID_FILE',
+  'UNSUPPORTED_FORMAT',
+  'FILE_TOO_LARGE',
+]);
 
 class ImageValidationError extends Error {
   constructor(
@@ -34,7 +38,9 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
   // Guard the queue contract: a missing/renamed field must fail loudly, not become undefined.
   const { imageId, jobId, storedPath } = job.data;
   if (!imageId || !jobId || !storedPath) {
-    throw new Error('Malformed image-processing job payload: imageId, jobId, and storedPath are required.');
+    throw new Error(
+      'Malformed image-processing job payload: imageId, jobId, and storedPath are required.',
+    );
   }
 
   let contentHash = '';
@@ -42,8 +48,8 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
 
   try {
     const updated = await markImageStatus(imageId, 'PROCESSING');
-    contentHash = (updated as any)?.contentHash || '';
-    userId = (updated as any)?.job?.userId || '';
+    contentHash = updated?.contentHash || '';
+    userId = updated?.job?.userId || '';
 
     const image = await loadImageForProcessing(imageId);
     validateImageRecord(image);
@@ -97,9 +103,10 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
 
 /** Return whether BullMQ will run this image again after the current failure. */
 function hasRetryAttemptsRemaining(job: Job<ImageJobData>): boolean {
-  const configuredAttempts = typeof job.opts?.attempts === 'number'
-    ? job.opts.attempts
-    : parseInt(process.env.MAX_RETRIES || '3', 10);
+  const configuredAttempts =
+    typeof job.opts?.attempts === 'number'
+      ? job.opts.attempts
+      : Number.parseInt(process.env.MAX_RETRIES || '3', 10);
 
   return job.attemptsMade + 1 < configuredAttempts;
 }
@@ -116,7 +123,10 @@ async function loadImageForProcessing(imageId: string) {
   });
 
   if (!image) {
-    throw new ImageValidationError('INVALID_FILE', 'Image record could not be found for processing.');
+    throw new ImageValidationError(
+      'INVALID_FILE',
+      'Image record could not be found for processing.',
+    );
   }
 
   return image;
@@ -134,7 +144,7 @@ function validateImageRecord(image: { mimeType: string; fileSize: number }) {
   if (image.fileSize > MAX_FILE_SIZE_BYTES) {
     throw new ImageValidationError(
       'FILE_TOO_LARGE',
-      `Image exceeds the 5MB size limit and cannot be processed.`,
+      'Image exceeds the 5MB size limit and cannot be processed.',
     );
   }
 }
@@ -144,11 +154,10 @@ async function readAndValidateImage(r2Key: string): Promise<Buffer> {
   const rawBuffer = await downloadFromR2(r2Key);
   try {
     return await sharp(rawBuffer).toBuffer();
-  } catch (sharpError: any) {
-    throw new ImageValidationError(
-      'INVALID_FILE',
-      `Could not decode image file: ${sharpError.message || 'corrupt or invalid image format'}`
-    );
+  } catch (sharpError: unknown) {
+    const message =
+      sharpError instanceof Error ? sharpError.message : 'corrupt or invalid image format';
+    throw new ImageValidationError('INVALID_FILE', `Could not decode image file: ${message}`);
   }
 }
 
@@ -160,11 +169,11 @@ async function markImageStatus(imageId: string, status: 'PROCESSING' | 'COMPLETE
     select: { contentHash: true, job: { select: { userId: true } } },
   });
 
-  if (status === 'PROCESSING' && updated && (updated as any).contentHash && (updated as any).job?.userId && typeof prisma.image.updateMany === 'function') {
+  if (status === 'PROCESSING' && updated?.contentHash && updated?.job?.userId) {
     await prisma.image.updateMany({
       where: {
-        contentHash: (updated as any).contentHash,
-        job: { userId: (updated as any).job.userId },
+        contentHash: updated.contentHash,
+        job: { userId: updated.job.userId },
         status: 'PENDING',
         id: { not: imageId },
       },
@@ -182,7 +191,11 @@ async function saveSuccessResult(
   userId: string,
   caption: string | null,
   labels: Array<{ name: string; score: number }>,
-  safetyResult: { isSafe: boolean; categories: Record<string, string>; flaggedCategory: string | null },
+  safetyResult: {
+    isSafe: boolean;
+    categories: Record<string, string>;
+    flaggedCategory: string | null;
+  },
 ) {
   // Always update the main image first
   await prisma.image.update({
@@ -198,7 +211,7 @@ async function saveSuccessResult(
   });
 
   // Then update pending/processing duplicates of the same user if hash info is available
-  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+  if (contentHash && userId) {
     await prisma.image.updateMany({
       where: {
         contentHash,
@@ -208,8 +221,8 @@ async function saveSuccessResult(
       },
       data: {
         caption,
-        labels: structuredClone(labels) as any,
-        safetyResult: structuredClone(safetyResult) as any,
+        labels: structuredClone(labels),
+        safetyResult: structuredClone(safetyResult),
         status: 'COMPLETED',
         failureReason: null,
         failureMessage: null,
@@ -248,7 +261,7 @@ async function flagImage(
   }
 
   // Handle duplicates if info is available
-  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+  if (contentHash && userId) {
     const duplicateImagesToFlag = await prisma.image.findMany({
       where: {
         contentHash,
@@ -279,8 +292,8 @@ async function flagImage(
               jobId: dupJobId,
               imageId: duplicateImagesToFlag.find((img) => img.jobId === dupJobId)?.id,
             },
-          })
-        )
+          }),
+        ),
       );
     }
   }
@@ -306,7 +319,7 @@ async function markImagePendingForRetry(
   });
 
   // Update duplicate images if info is available
-  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+  if (contentHash && userId) {
     await prisma.image.updateMany({
       where: {
         contentHash,
@@ -343,13 +356,13 @@ async function markImageFailedWithReason(
     },
   });
 
-  // Update duplicate images if info is available
-  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+  // Update PENDING duplicate images if info is available (don't touch PROCESSING — another worker owns them)
+  if (contentHash && userId) {
     await prisma.image.updateMany({
       where: {
         contentHash,
         job: { userId },
-        status: { in: ['PENDING', 'PROCESSING'] },
+        status: 'PENDING',
         id: { not: imageId },
       },
       data: {
@@ -381,13 +394,13 @@ async function markImageFailed(
     },
   });
 
-  // Update duplicate images if info is available
-  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+  // Update PENDING duplicate images if info is available (don't touch PROCESSING — another worker owns them)
+  if (contentHash && userId) {
     await prisma.image.updateMany({
       where: {
         contentHash,
         job: { userId },
-        status: { in: ['PENDING', 'PROCESSING'] },
+        status: 'PENDING',
         id: { not: imageId },
       },
       data: {
