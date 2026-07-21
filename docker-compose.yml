@@ -104,7 +104,7 @@ services:
       - server
 
   signoz-otel-collector:
-    image: signoz/signoz-otel-collector:0.110.0
+    image: otel/opentelemetry-collector:latest
     container_name: ampm-signoz-otel-collector
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
