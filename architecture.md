@@ -11,13 +11,16 @@ graph TD
     Client["React SPA Client"] <-->|HTTP/REST| API["Express API Gateway"]
     API <-->|Prisma ORM| Postgres[("PostgreSQL")]
     API -->|Queue Task| Redis[("Redis (BullMQ)")]
-    API <-->|Save/Load| Storage["Shared Media Storage"]
+    API <-->|Save/Load| Storage["Shared Media Storage (R2 / Local)"]
     
     Worker["BullMQ Worker"] <-->|Poll Tasks| Redis
     Worker <-->|Update State| Postgres
     Worker <-->|Read File| Storage
     Worker -->|Caption Request| HF["Hugging Face API"]
     Worker -->|Vision Analysis| Google["Google Vision API"]
+
+    API -.->|OTLP Traces & Metrics| SigNoz["SigNoz OTel Collector"]
+    Worker -.->|OTLP Traces & GenAI Spans| SigNoz
 ```
 
 ---
@@ -26,8 +29,8 @@ graph TD
 
 The codebase consists of three main packages:
 - **[/client](file:///E:/AMPM/client)**: React (Vite) single-page application.
-- **[/server](file:///E:/AMPM/server)**: Express REST API handling authentication, file storage, job records, and user notifications.
-- **[/worker](file:///E:/AMPM/worker)**: Node.js service executing the asynchronous AI image pipeline.
+- **[/server](file:///E:/AMPM/server)**: Express REST API handling authentication, file storage, job records, duplicate detection, security middleware, and user notifications.
+- **[/worker](file:///E:/AMPM/worker)**: Node.js service executing the asynchronous AI image pipeline with OpenTelemetry GenAI span tracking.
 
 ---
 
@@ -57,6 +60,7 @@ erDiagram
     images {
         string id PK
         string job_id FK
+        string content_hash "nullable, indexed"
         string original_name
         string stored_path
         string mime_type
@@ -84,6 +88,7 @@ erDiagram
     }
 ```
 
+- **Content Hash Index**: `content_hash` stores the SHA-256 digest of the uploaded image buffer. An index on `content_hash` enables $O(1)$ duplicate detection per user.
 - **Dynamic Job Status**: Job status is calculated dynamically at runtime by checking the status of its child `Image` records (not stored in the database).
 - **Token Versioning**: `token_version` on the `User` model is used to invalidate all active refresh tokens on logout.
 
@@ -92,6 +97,15 @@ erDiagram
 ## 4. Authentication & Security Model
 
 Auth supports local email/password credentials and native Google OAuth (Google Sign-In), backed by a secure access/refresh token model with Refresh Token Rotation (RTR).
+
+### Security & Hardening Layer
+- **Helmet HTTP Headers**: Enforces Strict-Transport-Security (HSTS), Content-Security-Policy (CSP), and X-Content-Type-Options headers across all responses.
+- **XSS Payload Sanitization**: Global Express middleware (`middleware/sanitize.ts`) strips recursive XSS injection attempts from request body, query parameters, and URL path parameters.
+- **UUID Validation Middleware**: Path parameters (`:jobId`, `:imageId`, `:id`) are strictly validated against standard UUID format regex before handler execution.
+- **Payload Limits & Filename Sanitization**: Body parser capped at 1MB (`express.json({ limit: "1mb" })`). Uploaded filenames are sanitized (`helpers/sanitize-filename.ts`) to prevent path traversal and XSS.
+- **Rate Limiting**: Protected endpoints enforce `express-rate-limit` per authenticated user ID:
+  - **Upload Endpoint** (`POST /api/jobs`): 10 requests per 15 minutes.
+  - **Retry Endpoints** (`POST /api/jobs/:jobId/images/:imageId/retry` and `POST /api/jobs/:jobId/retry`): 20 requests per 15 minutes.
 
 ### Local Authentication Flow
 
@@ -142,19 +156,19 @@ sequenceDiagram
 
 ---
 
-## 5. Job Upload & Atomic Enqueueing
+## 5. Job Upload, Deduplication & Atomic Enqueueing
 
 When uploading a batch of $N$ images:
-1. **Validation**: Multer validates file types (JPEG, PNG, WEBP) and size (limit: 5MB per file).
-2. **Transaction**: A database transaction creates a `Job` record and $N$ related `Image` records with `PENDING` status.
-3. **Queueing**: Tasks are enqueued to Redis via BullMQ.
-4. **Rollback Safety**: If queue insertion fails, the database transaction is rolled back (the job and images are deleted) to avoid orphaned `PENDING` states.
+1. **Validation & Hashing**: Multer validates file types (JPEG, PNG, WEBP) and size (limit: 5MB per file). The API computes a SHA-256 digest (`content_hash`) for each file buffer.
+2. **Duplicate Lookup**: The API queries `images` for an existing completed image belonging to the user with the same `content_hash`. If found, metadata (`caption`, `labels`, `safety_result`, `is_flagged`) is copied into the new record with `COMPLETED` status immediately, skipping Redis queueing.
+3. **Transaction**: A Prisma transaction creates a `Job` record and related `Image` records (either `COMPLETED` for duplicates or `PENDING` for new files).
+4. **Queueing & Rollback Safety**: Only new `PENDING` images are enqueued to BullMQ in Redis. If queue insertion fails, the database transaction rolls back, preventing orphaned records.
 
 ---
 
 ## 6. Worker Pipeline
 
-The worker polls BullMQ tasks and runs each image through the following stages:
+The worker polls BullMQ tasks and runs each image through the safety-first pipeline:
 
 ```mermaid
 flowchart TD
@@ -164,13 +178,14 @@ flowchart TD
     subgraph AI Pipeline
         Sharp --> Safe[1. Google Vision SafeSearch]
         Safe --> Label[2. Google Vision Labels]
-        Label --> Caption[3. Hugging Face Captioning (if safe)]
+        Label --> SafetyCheck{SafeSearch Flagged?}
+        SafetyCheck -->|No| Caption[3. Hugging Face BLIP Captioning]
+        SafetyCheck -->|Yes| Flag[Set isFlagged: true & Category]
     end
 
-    Safe --> SafetyCheck{SafeSearch Flagged?}
-    SafetyCheck -->|Yes| Flag[Set isFlagged: true & Category]
     Flag --> Notif[Create User Notification in DB]
     Notif --> Save[Save AI Output to DB]
+    Caption --> Save
     SafetyCheck -->|No| Save
 
     Save --> Comp[Mark Status: COMPLETED]
@@ -191,6 +206,13 @@ flowchart TD
     FinalFail --> EndErr
 ```
 
-### Error Classification
-- **Non-Retryable Errors** (`INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`): Database status is set to `FAILED` and `job.discard()` is called to stop BullMQ from retrying.
-- **Retryable Errors** (`TIMEOUT`, `RATE_LIMIT`, `API_ERROR`, `INTERNAL_ERROR`): Database status is reset to `PENDING`, `retryCount` is incremented, and the task fails, prompting BullMQ to retry with exponential backoff.
+### Safety-First Execution Order
+- **Google Vision SafeSearch & Label Detection** run prior to Hugging Face captioning.
+- If SafeSearch detects unsafe content (`LIKELY` or `VERY_LIKELY`), captioning is skipped to save AI model token quota, and an in-app notification is dispatched.
+
+### Resilient Networking & Error Classification
+- **DNS Warm-Up**: Hugging Face API requests feature best-effort public DNS pre-resolution to absorb transient resolver lookup drops (`ENOTFOUND`).
+- **Classification Rules**:
+  - **Non-Retryable Errors** (`INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`): Marked `FAILED`, discarded via `job.discard()`.
+  - **Retryable Errors** (`AI_PROVIDER_TIMEOUT`, `AI_PROVIDER_RATE_LIMITED`, `AI_PROVIDER_UNAUTHORIZED`, `GOOGLE_VISION_API_ERROR`, `NETWORK_ERROR`, `INTERNAL_ERROR`): Database status reset to `PENDING`, `retry_count` incremented, BullMQ retries with exponential backoff.
+

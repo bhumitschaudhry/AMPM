@@ -11,7 +11,7 @@ export function validateUuid(...params: string[]) {
   return (req: Request, _res: Response, next: NextFunction) => {
     for (const param of params) {
       const value = req.params[param];
-      if (!value || !UUID_REGEX.test(value)) {
+      if (!value || typeof value !== "string" || !UUID_REGEX.test(value)) {
         return next(createHttpError(400, `Invalid ${param} format`));
       }
     }

@@ -29,3 +29,16 @@ The AMPM codebase is split into [client](file:///E:/AMPM/client), [server](file:
 ### 5. Deferred Code Sharing Refactor
 - **Status**: Deferred extracting a shared package (e.g. `@ampm/shared`).
 - **Workaround**: Types like [ImageJobData](file:///E:/AMPM/worker/src/process-image.ts) and constants like [ALLOWED_MIME_TYPES](file:///E:/AMPM/server/src/constants.ts) remain duplicated. We ensure alignment through strict runtime schema validation in the worker, and cross-reference the canonical queue name in [server/src/queue.ts](file:///E:/AMPM/server/src/queue.ts).
+
+### 6. SHA-256 Image Content Deduplication
+- **Implementation**: Uploaded image buffers are digested to SHA-256 (`content_hash`) and indexed in PostgreSQL (`images.content_hash`).
+- **Optimization**: If an existing completed image with identical hash is found for the user, AI metadata is copied directly and marked `COMPLETED` immediately, bypassing queueing and external AI API costs.
+
+### 7. Security Hardening & Input Defense
+- **Implementation**: API Gateway enforces Helmet security headers, recursive XSS sanitization, UUID route parameter validation, and 1MB request body parsing limits.
+- **Rate Limiting**: Protected endpoints enforce per-user rate limits (10 uploads / 15 min; 20 retries / 15 min) via `express-rate-limit`.
+
+### 8. Safety-First AI Worker Pipeline Ordering
+- **Pipeline Flow**: Google Cloud Vision SafeSearch and Label Detection run before Hugging Face BLIP image captioning.
+- **Quota Protection**: If SafeSearch flags an upload as unsafe (`LIKELY` or `VERY_LIKELY`), caption generation is skipped to avoid sending unsafe material to third-party endpoints and to preserve AI token budget.
+

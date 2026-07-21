@@ -43,6 +43,9 @@ Configure your local `.env` file based on [.env.example](file:///E:/AMPM/.env.ex
 | `R2_BUCKET_NAME` | API & Worker | Targeted Cloudflare R2 bucket name. |
 | `CLIENT_URL` | API | The origin URL of the Client (e.g. `https://<pages-project>.pages.dev`). |
 | `VITE_API_URL` | Client | The base URL of the API gateway (e.g. `https://ampm-api.fly.dev/api`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | API & Worker | SigNoz / OpenTelemetry Collector OTLP endpoint (e.g., `http://otel-collector:4318`). |
+| `OTEL_SERVICE_NAME` | API & Worker | OpenTelemetry service name (`ampm-server` / `ampm-worker`). |
+
 
 ---
 
