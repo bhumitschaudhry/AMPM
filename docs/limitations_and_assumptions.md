@@ -18,7 +18,7 @@ This document captures the core assumptions, key design decisions, and known lim
 2. **Refresh Token Rotation (RTR)**: The authentication layer rotates refresh tokens on every verification. A `token_version` counter is maintained on the user record in PostgreSQL to allow instant global logout/revocation of all active sessions.
 3. **Database-Queue Cohesiveness**: Database records and queue operations are executed atomically. If the Redis queue enqueuing fails, the database transaction is rolled back to prevent orphaned database records.
 4. **SHA-256 Content Hash Deduplication**: Uploaded image buffers are hashed to SHA-256 digests. If an indexed `content_hash` match exists for the user, processing results are copied immediately into the new record with `COMPLETED` status, bypassing BullMQ queueing and AI API calls.
-5. **Safety-First Pipeline Ordering**: Google SafeSearch & Label Detection run prior to Hugging Face captioning. Unsafe images skip the BLIP model invocation entirely, saving API credit quota and preventing unsafe content transmission.
+5. **Safety-First Pipeline Ordering**: Google SafeSearch runs first. Unsafe images stop the pipeline immediately (no label detection, no BLIP captioning), saving API credit quota and preventing unsafe content transmission to further providers. The user is notified in-app.
 6. **Defense-in-Depth Security & Rate Limiting**: The server enforces Helmet security headers, recursive XSS payload sanitization, UUID route validation, 1MB payload caps, and per-user rate limits (10 upload reqs / 15 mins, 20 retry reqs / 15 mins).
 7. **OpenTelemetry & SigNoz Observability**: Built-in OpenTelemetry instrumentation exports traces, GenAI model token usage metrics (`gen_ai.usage.input_tokens`, `output_tokens`), and JWT authentication metrics to SigNoz.
 
@@ -29,4 +29,3 @@ This document captures the core assumptions, key design decisions, and known lim
 1. **Server-Mediated Uploads**: Currently, the API Gateway receives the full image file payload and writes it locally or to R2. For heavy production traffic, the system should transition to client-side direct-to-storage uploads using presigned S3/R2 URLs, bypassing the API Gateway.
 2. **External API Rate Limits & Quotas**: Hugging Face and Google Cloud Vision rate limits can be triggered under heavy loads. Implementing fallback models or locally hosted AI inference engines (e.g., local BLIP/OCR containers) would improve reliability.
 3. **WebSocket Status Updates**: The current frontend uses polling to fetch job status updates. Transitioning to WebSockets or Server-Sent Events (SSE) would reduce database queries and provide instant updates.
-

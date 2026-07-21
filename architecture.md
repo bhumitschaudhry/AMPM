@@ -12,7 +12,7 @@ graph TD
     API <-->|Prisma ORM| Postgres[("PostgreSQL")]
     API -->|Queue Task| Redis[("Redis (BullMQ)")]
     API <-->|Save/Load| Storage["Shared Media Storage (R2 / Local)"]
-    
+
     Worker["BullMQ Worker"] <-->|Poll Tasks| Redis
     Worker <-->|Update State| Postgres
     Worker <-->|Read File| Storage
@@ -28,6 +28,7 @@ graph TD
 ## 2. Directory Layout & Package Breakdown
 
 The codebase consists of three main packages:
+
 - **[/client](file:///E:/AMPM/client)**: React (Vite) single-page application.
 - **[/server](file:///E:/AMPM/server)**: Express REST API handling authentication, file storage, job records, duplicate detection, security middleware, and user notifications.
 - **[/worker](file:///E:/AMPM/worker)**: Node.js service executing the asynchronous AI image pipeline with OpenTelemetry GenAI span tracking.
@@ -99,6 +100,7 @@ erDiagram
 Auth supports local email/password credentials and native Google OAuth (Google Sign-In), backed by a secure access/refresh token model with Refresh Token Rotation (RTR).
 
 ### Security & Hardening Layer
+
 - **Helmet HTTP Headers**: Enforces Strict-Transport-Security (HSTS), Content-Security-Policy (CSP), and X-Content-Type-Options headers across all responses.
 - **XSS Payload Sanitization**: Global Express middleware (`middleware/sanitize.ts`) strips recursive XSS injection attempts from request body, query parameters, and URL path parameters.
 - **UUID Validation Middleware**: Path parameters (`:jobId`, `:imageId`, `:id`) are strictly validated against standard UUID format regex before handler execution.
@@ -159,6 +161,7 @@ sequenceDiagram
 ## 5. Job Upload, Deduplication & Atomic Enqueueing
 
 When uploading a batch of $N$ images:
+
 1. **Validation & Hashing**: Multer validates file types (JPEG, PNG, WEBP) and size (limit: 5MB per file). The API computes a SHA-256 digest (`content_hash`) for each file buffer.
 2. **Duplicate Lookup**: The API queries `images` for an existing completed image belonging to the user with the same `content_hash`. If found, metadata (`caption`, `labels`, `safety_result`, `is_flagged`) is copied into the new record with `COMPLETED` status immediately, skipping Redis queueing.
 3. **Transaction**: A Prisma transaction creates a `Job` record and related `Image` records (either `COMPLETED` for duplicates or `PENDING` for new files).
@@ -174,26 +177,25 @@ The worker polls BullMQ tasks and runs each image through the safety-first pipel
 flowchart TD
     Start([Task Received]) --> Proc[Mark Status: PROCESSING]
     Proc --> Sharp[Read & Validate Image via Sharp]
-    
+
     subgraph AI Pipeline
         Sharp --> Safe[1. Google Vision SafeSearch]
-        Safe --> Label[2. Google Vision Labels]
-        Label --> SafetyCheck{SafeSearch Flagged?}
-        SafetyCheck -->|No| Caption[3. Hugging Face BLIP Captioning]
-        SafetyCheck -->|Yes| Flag[Set isFlagged: true & Category]
+        Safe --> SafetyCheck{SafeSearch Flagged?}
+        SafetyCheck -->|No| Label[2. Google Vision Labels]
+        Label --> Caption[3. Hugging Face BLIP Captioning]
+        SafetyCheck -->|Yes| Flag[Set isFlagged: true & Category — skip labels & caption]
     end
 
     Flag --> Notif[Create User Notification in DB]
-    Notif --> Save[Save AI Output to DB]
+    Notif --> Save[Save safety result to DB]
     Caption --> Save
-    SafetyCheck -->|No| Save
 
     Save --> Comp[Mark Status: COMPLETED]
     Comp --> Done([Task Completed])
 
     AI Pipeline -.->|Pipeline Failure| Err[Categorize Error Retryability]
     Err --> RetryCheck{Retryable?}
-    
+
     RetryCheck -->|No| Fail[Mark Status: FAILED]
     Fail --> Discard[Discard Task]
     Discard --> EndErr([Task Discarded])
@@ -201,18 +203,19 @@ flowchart TD
     RetryCheck -->|Yes| AttemptCheck{Attempts Remaining?}
     AttemptCheck -->|Yes| Resubmit[Increment retry_count & Set PENDING]
     Resubmit --> FailQueue([Fail Task for Redis Retry])
-    
+
     AttemptCheck -->|No| FinalFail[Mark Status: FAILED with MAX_RETRIES_EXCEEDED]
     FinalFail --> EndErr
 ```
 
 ### Safety-First Execution Order
-- **Google Vision SafeSearch & Label Detection** run prior to Hugging Face captioning.
-- If SafeSearch detects unsafe content (`LIKELY` or `VERY_LIKELY`), captioning is skipped to save AI model token quota, and an in-app notification is dispatched.
+
+- **Google Vision SafeSearch** runs first. On a safe result, **Label Detection** then **Hugging Face BLIP captioning** run next.
+- If SafeSearch detects unsafe content (`LIKELY` or `VERY_LIKELY`), the pipeline stops immediately: label detection and captioning are both skipped to save AI compute/quota, results are saved with an empty label set and null caption, the image is flagged, and an in-app notification is dispatched.
 
 ### Resilient Networking & Error Classification
+
 - **DNS Warm-Up**: Hugging Face API requests feature best-effort public DNS pre-resolution to absorb transient resolver lookup drops (`ENOTFOUND`).
 - **Classification Rules**:
   - **Non-Retryable Errors** (`INVALID_FILE`, `UNSUPPORTED_FORMAT`, `FILE_TOO_LARGE`): Marked `FAILED`, discarded via `job.discard()`.
   - **Retryable Errors** (`AI_PROVIDER_TIMEOUT`, `AI_PROVIDER_RATE_LIMITED`, `AI_PROVIDER_UNAUTHORIZED`, `GOOGLE_VISION_API_ERROR`, `NETWORK_ERROR`, `INTERNAL_ERROR`): Database status reset to `PENDING`, `retry_count` incremented, BullMQ retries with exponential backoff.
-
