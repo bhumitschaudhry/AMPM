@@ -6,6 +6,7 @@ import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import { metrics } from "@opentelemetry/api";
+import { startQueueDepthMetrics } from "./queue-metrics";
 
 let sdk: NodeSDK | null = null;
 
@@ -93,4 +94,7 @@ export function initTelemetry(customServiceName?: string): NodeSDK | null {
 
 if (process.env.NODE_ENV !== "test" && process.env.OTEL_SDK_DISABLED !== "true") {
   initTelemetry();
+  if (process.env.QUEUE_DEPTH_METRICS_ENABLED !== "false") {
+    startQueueDepthMetrics();
+  }
 }

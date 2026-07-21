@@ -20,6 +20,7 @@ import { swaggerRouter } from "./routes/swagger-routes";
 import { errorHandler } from "./middleware/error-handler";
 import { sanitizeInput } from "./middleware/sanitize";
 import { globalRateLimiter } from "./middleware/rate-limiter";
+import { stopQueueDepthMetrics } from "./queue-metrics";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -82,5 +83,13 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`AMPM Server running on port ${PORT}`);
 });
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => {
+    console.log(`[server] Received ${signal}, shutting down gracefully`);
+    stopQueueDepthMetrics();
+    process.exit(0);
+  });
+}
 
 export default app;
