@@ -1,7 +1,33 @@
+import dns from 'node:dns';
 import axios from 'axios';
-import dns from 'dns';
-import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
 import { recordBlipTokenAnalysis } from '../telemetry';
+import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
+
+/** Extract the network error code (e.g. ENOTFOUND) from an unknown catch value. */
+function getAxiosErrorCode(error: unknown): string | undefined {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof (error as Record<string, unknown>).code === 'string'
+  ) {
+    return (error as Record<string, unknown>).code as string;
+  }
+  return undefined;
+}
+
+interface AxiosLikeResponse {
+  status?: number;
+  data?: unknown;
+}
+
+/** Extract the HTTP response object from an unknown axios catch value. */
+function getAxiosResponse(error: unknown): AxiosLikeResponse | undefined {
+  if (error && typeof error === 'object' && 'response' in error) {
+    return (error as { response: AxiosLikeResponse }).response;
+  }
+  return undefined;
+}
 
 // HuggingFace inference hosts, tried in order. The canonical api-inference
 // subdomain has been observed returning ENOTFOUND during DNS outages, so the
@@ -100,15 +126,21 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
       return caption;
     } catch (error) {
       lastError = error;
-      
-      const responseStatus = error && typeof error === 'object' && 'response' in error ? (error as any).response?.status : undefined;
-      const responseData = error && typeof error === 'object' && 'response' in error ? (error as any).response?.data : undefined;
-      const isUnsupported = responseStatus === 400 &&
-        (typeof responseData === 'object' && responseData !== null &&
-         (responseData.error?.includes('not supported') || responseData.error?.includes('Model not supported')));
+
+      const response = getAxiosResponse(error);
+      const responseStatus = response?.status;
+      const responseData = response?.data;
+      const isUnsupported =
+        responseStatus === 400 &&
+        typeof responseData === 'object' &&
+        responseData !== null &&
+        ((responseData as Record<string, string>).error?.includes('not supported') ||
+          (responseData as Record<string, string>).error?.includes('Model not supported'));
 
       if (isUnsupported) {
-        console.warn('[WARN] HuggingFace model Salesforce/blip-image-captioning-base is decommissioned or unsupported. Returning fallback caption.');
+        console.warn(
+          '[WARN] HuggingFace model Salesforce/blip-image-captioning-base is decommissioned or unsupported. Returning fallback caption.',
+        );
         recordBlipTokenAnalysis({
           imageBuffer,
           caption: 'An uploaded image',
@@ -118,20 +150,32 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
         return 'An uploaded image';
       }
 
-      const code = error && typeof error === 'object' && 'code' in error ? (error as any).code : undefined;
+      const code = getAxiosErrorCode(error);
       // API-level errors (bad response, model loading) are host-independent —
       // don't waste a fallback attempt, surface them immediately.
-      const isNetworkError = Boolean(code) && ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(code);
+      const isNetworkError =
+        Boolean(code) &&
+        [
+          'ENOTFOUND',
+          'EAI_AGAIN',
+          'ECONNREFUSED',
+          'ENETUNREACH',
+          'ECONNRESET',
+          'ETIMEDOUT',
+          'ECONNABORTED',
+        ].includes(code!);
       if (!isNetworkError) {
         recordBlipTokenAnalysis({
           imageBuffer,
           durationMs: Date.now() - startTime,
           isSuccess: false,
         });
-        const message = error && typeof error === 'object' && 'message' in error ? (error as any).message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         throw new Error(`HuggingFace request failed${code ? ` (${code})` : ''}: ${message}`);
       }
-      console.warn(`[WARN] HuggingFace host ${host} failed${code ? ` (${code})` : ''}; trying next host if available.`);
+      console.warn(
+        `[WARN] HuggingFace host ${host} failed${code ? ` (${code})` : ''}; trying next host if available.`,
+      );
     }
   }
 
@@ -142,14 +186,12 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
     isSuccess: false,
   });
 
-  const code = lastError && typeof lastError === 'object' && 'code' in lastError ? (lastError as any).code : undefined;
+  const code = getAxiosErrorCode(lastError);
   const finalError = new Error(
     `HuggingFace request failed${code ? ` (${code})` : ''}: all inference hosts unreachable`,
   );
   if (code) {
-    (finalError as any).code = code;
+    Object.assign(finalError, { code });
   }
   throw finalError;
 }
-
-

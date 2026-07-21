@@ -275,13 +275,15 @@ async function flagImage(
     if (duplicateImagesToFlag.length > 0) {
       await prisma.image.updateMany({
         where: {
-          id: { in: duplicateImagesToFlag.map((img) => img.id) },
+          id: { in: duplicateImagesToFlag.map((img: { id: string }) => img.id) },
         },
         data: { isFlagged: true, flaggedCategory },
       });
 
       // Create notifications for duplicate jobs
-      const uniqueJobIds = Array.from(new Set(duplicateImagesToFlag.map((img) => img.jobId)));
+      const uniqueJobIds = Array.from(
+        new Set(duplicateImagesToFlag.map((img: { jobId: string }) => img.jobId)),
+      );
       await Promise.all(
         uniqueJobIds.map((dupJobId) =>
           prisma.notification.create({
@@ -290,7 +292,9 @@ async function flagImage(
               title: 'Image Flagged',
               message: `An image was flagged for "${flaggedCategory}" content and requires review.`,
               jobId: dupJobId,
-              imageId: duplicateImagesToFlag.find((img) => img.jobId === dupJobId)?.id,
+              imageId: duplicateImagesToFlag.find(
+                (img: { id: string; jobId: string }) => img.jobId === dupJobId,
+              )?.id,
             },
           }),
         ),
@@ -318,13 +322,13 @@ async function markImagePendingForRetry(
     },
   });
 
-  // Update duplicate images if info is available
+  // Update PENDING duplicate images if info is available (don't touch PROCESSING — another worker owns them)
   if (contentHash && userId) {
     await prisma.image.updateMany({
       where: {
         contentHash,
         job: { userId },
-        status: { in: ['PENDING', 'PROCESSING'] },
+        status: 'PENDING',
         id: { not: imageId },
       },
       data: {

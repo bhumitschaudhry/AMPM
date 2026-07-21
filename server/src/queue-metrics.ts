@@ -4,12 +4,10 @@ import { imageQueue } from './queue';
 const TRACKED_STATES = ['waiting', 'active', 'delayed'] as const;
 type TrackedState = (typeof TRACKED_STATES)[number];
 
-const queueDepthCounter = metrics
-  .getMeter('ampm-server')
-  .createUpDownCounter('ampm.queue.depth', {
-    description: 'Number of image-processing jobs in the BullMQ queue, segmented by state.',
-    unit: '1',
-  });
+const queueDepthCounter = metrics.getMeter('ampm-server').createUpDownCounter('ampm.queue.depth', {
+  description: 'Number of image-processing jobs in the BullMQ queue, segmented by state.',
+  unit: '1',
+});
 
 let intervalHandle: NodeJS.Timeout | null = null;
 const previousCounts: Record<TrackedState, number> = {
@@ -43,7 +41,7 @@ export function startQueueDepthMetrics(): void {
   if (process.env.QUEUE_DEPTH_METRICS_ENABLED === 'false') {
     return;
   }
-  const intervalMs = parseInt(process.env.QUEUE_DEPTH_POLL_INTERVAL_MS || '10000', 10);
+  const intervalMs = Number.parseInt(process.env.QUEUE_DEPTH_POLL_INTERVAL_MS || '10000', 10);
   if (Number.isNaN(intervalMs) || intervalMs <= 0) {
     console.warn('[queue-metrics] Invalid QUEUE_DEPTH_POLL_INTERVAL_MS; using 10000');
   }

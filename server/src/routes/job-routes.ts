@@ -193,7 +193,7 @@ jobRouter.post('/', uploadRateLimiter, (req: Request, res: Response, next: NextF
       }
       if (orphanedKeys.length > 0) {
         // Delete orphaned uploads in background (don't block response)
-        Promise.all(orphanedKeys.map((key) => deleteFromR2(key))).catch((err) => {
+        void Promise.all(orphanedKeys.map((key) => deleteFromR2(key))).catch((err) => {
           console.error('Failed to delete orphaned R2 uploads:', err);
         });
       }
