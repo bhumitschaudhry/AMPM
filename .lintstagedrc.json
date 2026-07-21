@@ -1,0 +1,9 @@
+{
+  "*.{js,ts,tsx,mjs,cjs}": [
+    "eslint --fix",
+    "biome check --write --no-errors-on-unmatched",
+    "prettier --write"
+  ],
+  "*.json": ["biome check --write --no-errors-on-unmatched", "prettier --write"],
+  "*.{css,md}": ["prettier --write"]
+}

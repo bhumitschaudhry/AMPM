@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+package-lock.json
+**/package-lock.json
+.superpowers
+.git
+.github
+client/nginx.conf
+server/prisma/migrations
