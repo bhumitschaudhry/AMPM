@@ -37,33 +37,59 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
     throw new Error('Malformed image-processing job payload: imageId, jobId, and storedPath are required.');
   }
 
+  let contentHash = '';
+  let userId = '';
+
   try {
-    await markImageStatus(imageId, 'PROCESSING');
+    const updated = await markImageStatus(imageId, 'PROCESSING');
+    contentHash = (updated as any)?.contentHash || '';
+    userId = (updated as any)?.job?.userId || '';
 
     const image = await loadImageForProcessing(imageId);
     validateImageRecord(image);
 
     const imageBuffer = await readAndValidateImage(image.storedPath);
     const safetyResult = await checkContentSafety(imageBuffer);
-    const labels = await detectLabels(imageBuffer);
-    const caption = safetyResult.isSafe ? await generateCaption(imageBuffer) : null;
 
-    await saveSuccessResult(imageId, caption, labels, safetyResult);
-
+    // Stop immediately on unsafe content: skip label detection and captioning to save AI compute.
     if (!safetyResult.isSafe) {
-      await flagImage(imageId, job.data.jobId, safetyResult.flaggedCategory!);
+      await saveSuccessResult(imageId, contentHash, userId, null, [], safetyResult);
+      await flagImage(imageId, jobId, contentHash, userId, safetyResult.flaggedCategory!);
+      return;
     }
+
+    const labels = await detectLabels(imageBuffer);
+    const caption = await generateCaption(imageBuffer);
+
+    await saveSuccessResult(imageId, contentHash, userId, caption, labels, safetyResult);
   } catch (error) {
     const { code, message } = categorizeError(error);
+
+    // Fallback: resolve contentHash and userId if they couldn't be loaded
+    if (!contentHash || !userId) {
+      try {
+        const img = await prisma.image.findUnique({
+          where: { id: imageId },
+          select: { contentHash: true, job: { select: { userId: true } } },
+        });
+        if (img) {
+          contentHash = img.contentHash;
+          userId = img.job.userId;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     if (NON_RETRYABLE_FAILURE_REASONS.has(code)) {
       // ponytail: non-retryable (e.g. FILE_TOO_LARGE) can never succeed — discard the
       // job so BullMQ won't burn AI quota re-running it. DB status is the source of truth.
-      await markImageFailedWithReason(imageId, code, message);
+      await markImageFailedWithReason(imageId, contentHash, userId, code, message);
       await job.discard();
     } else if (hasRetryAttemptsRemaining(job)) {
-      await markImagePendingForRetry(imageId, code, message);
+      await markImagePendingForRetry(imageId, contentHash, userId, code, message);
     } else {
-      await markImageFailed(imageId, code, message);
+      await markImageFailed(imageId, contentHash, userId, code, message);
     }
     throw error;
   }
@@ -126,21 +152,39 @@ async function readAndValidateImage(r2Key: string): Promise<Buffer> {
   }
 }
 
-/** Set image status in the database. */
+/** Set image status in the database for the image and its pending duplicates of the same user. */
 async function markImageStatus(imageId: string, status: 'PROCESSING' | 'COMPLETED') {
-  await prisma.image.update({
+  const updated = await prisma.image.update({
     where: { id: imageId },
     data: { status },
+    select: { contentHash: true, job: { select: { userId: true } } },
   });
+
+  if (status === 'PROCESSING' && updated && (updated as any).contentHash && (updated as any).job?.userId && typeof prisma.image.updateMany === 'function') {
+    await prisma.image.updateMany({
+      where: {
+        contentHash: (updated as any).contentHash,
+        job: { userId: (updated as any).job.userId },
+        status: 'PENDING',
+        id: { not: imageId },
+      },
+      data: { status },
+    });
+  }
+
+  return updated;
 }
 
-/** Persist all AI pipeline results and mark image as completed. */
+/** Persist all AI pipeline results and mark image and its duplicate processing records as completed. */
 async function saveSuccessResult(
   imageId: string,
+  contentHash: string,
+  userId: string,
   caption: string | null,
   labels: Array<{ name: string; score: number }>,
   safetyResult: { isSafe: boolean; categories: Record<string, string>; flaggedCategory: string | null },
 ) {
+  // Always update the main image first
   await prisma.image.update({
     where: { id: imageId },
     data: {
@@ -152,32 +196,105 @@ async function saveSuccessResult(
       failureMessage: null,
     },
   });
+
+  // Then update pending/processing duplicates of the same user if hash info is available
+  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+    await prisma.image.updateMany({
+      where: {
+        contentHash,
+        job: { userId },
+        status: { in: ['PENDING', 'PROCESSING'] },
+        id: { not: imageId },
+      },
+      data: {
+        caption,
+        labels: structuredClone(labels) as any,
+        safetyResult: structuredClone(safetyResult) as any,
+        status: 'COMPLETED',
+        failureReason: null,
+        failureMessage: null,
+      },
+    });
+  }
 }
 
-/** Flag an unsafe image and create a notification for the job owner. */
-async function flagImage(imageId: string, jobId: string, flaggedCategory: string) {
+/** Flag unsafe images and create notifications for their job owners. */
+async function flagImage(
+  imageId: string,
+  jobId: string,
+  contentHash: string,
+  userId: string,
+  flaggedCategory: string,
+) {
+  // Always update the main image first
   await prisma.image.update({
     where: { id: imageId },
     data: { isFlagged: true, flaggedCategory },
   });
 
-  // Look up the job to find the user who owns it for the notification
+  // Create notification for the main job
   const parentJob = await prisma.job.findUnique({ where: { id: jobId }, select: { userId: true } });
-  if (!parentJob) return;
+  const ownerId = parentJob?.userId || userId;
+  if (ownerId) {
+    await prisma.notification.create({
+      data: {
+        userId: ownerId,
+        title: 'Image Flagged',
+        message: `An image was flagged for "${flaggedCategory}" content and requires review.`,
+        imageId,
+        jobId,
+      },
+    });
+  }
 
-  await prisma.notification.create({
-    data: {
-      userId: parentJob.userId,
-      title: 'Image Flagged',
-      message: `An image was flagged for "${flaggedCategory}" content and requires review.`,
-      imageId,
-      jobId,
-    },
-  });
+  // Handle duplicates if info is available
+  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+    const duplicateImagesToFlag = await prisma.image.findMany({
+      where: {
+        contentHash,
+        job: { userId },
+        isFlagged: false,
+        id: { not: imageId },
+      },
+      select: { id: true, jobId: true },
+    });
+
+    if (duplicateImagesToFlag.length > 0) {
+      await prisma.image.updateMany({
+        where: {
+          id: { in: duplicateImagesToFlag.map((img) => img.id) },
+        },
+        data: { isFlagged: true, flaggedCategory },
+      });
+
+      // Create notifications for duplicate jobs
+      const uniqueJobIds = Array.from(new Set(duplicateImagesToFlag.map((img) => img.jobId)));
+      await Promise.all(
+        uniqueJobIds.map((dupJobId) =>
+          prisma.notification.create({
+            data: {
+              userId,
+              title: 'Image Flagged',
+              message: `An image was flagged for "${flaggedCategory}" content and requires review.`,
+              jobId: dupJobId,
+              imageId: duplicateImagesToFlag.find((img) => img.jobId === dupJobId)?.id,
+            },
+          })
+        )
+      );
+    }
+  }
 }
 
 /** Record a non-terminal failure while BullMQ waits to retry the image. */
-async function markImagePendingForRetry(imageId: string, failureReason: string, failureMessage: string) {
+async function markImagePendingForRetry(
+  imageId: string,
+  contentHash: string,
+  userId: string,
+  failureReason: string,
+  failureMessage: string,
+) {
+  // Always update the main image first
   await prisma.image.update({
     where: { id: imageId },
     data: {
@@ -187,10 +304,35 @@ async function markImagePendingForRetry(imageId: string, failureReason: string, 
       failureMessage,
     },
   });
+
+  // Update duplicate images if info is available
+  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+    await prisma.image.updateMany({
+      where: {
+        contentHash,
+        job: { userId },
+        status: { in: ['PENDING', 'PROCESSING'] },
+        id: { not: imageId },
+      },
+      data: {
+        status: 'PENDING',
+        retryCount: { increment: 1 },
+        failureReason,
+        failureMessage,
+      },
+    });
+  }
 }
 
 /** Record a terminal non-retryable failure with its root failure reason. */
-async function markImageFailedWithReason(imageId: string, failureReason: string, failureMessage: string) {
+async function markImageFailedWithReason(
+  imageId: string,
+  contentHash: string,
+  userId: string,
+  failureReason: string,
+  failureMessage: string,
+) {
+  // Always update the main image first
   await prisma.image.update({
     where: { id: imageId },
     data: {
@@ -200,10 +342,35 @@ async function markImageFailedWithReason(imageId: string, failureReason: string,
       failureMessage,
     },
   });
+
+  // Update duplicate images if info is available
+  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+    await prisma.image.updateMany({
+      where: {
+        contentHash,
+        job: { userId },
+        status: { in: ['PENDING', 'PROCESSING'] },
+        id: { not: imageId },
+      },
+      data: {
+        status: 'FAILED',
+        retryCount: { increment: 1 },
+        failureReason,
+        failureMessage,
+      },
+    });
+  }
 }
 
 /** Record the final failure after BullMQ exhausts its configured attempts. */
-async function markImageFailed(imageId: string, failureReason: string, failureMessage: string) {
+async function markImageFailed(
+  imageId: string,
+  contentHash: string,
+  userId: string,
+  failureReason: string,
+  failureMessage: string,
+) {
+  // Always update the main image first
   await prisma.image.update({
     where: { id: imageId },
     data: {
@@ -213,4 +380,22 @@ async function markImageFailed(imageId: string, failureReason: string, failureMe
       failureMessage: `Processing failed after all retry attempts. Last error (${failureReason}): ${failureMessage}`,
     },
   });
+
+  // Update duplicate images if info is available
+  if (contentHash && userId && typeof prisma.image.updateMany === 'function') {
+    await prisma.image.updateMany({
+      where: {
+        contentHash,
+        job: { userId },
+        status: { in: ['PENDING', 'PROCESSING'] },
+        id: { not: imageId },
+      },
+      data: {
+        status: 'FAILED',
+        retryCount: { increment: 1 },
+        failureReason: 'MAX_RETRIES_EXCEEDED',
+        failureMessage: `Processing failed after all retry attempts. Last error (${failureReason}): ${failureMessage}`,
+      },
+    });
+  }
 }

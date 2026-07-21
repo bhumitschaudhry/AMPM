@@ -46,40 +46,56 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
         include: { job: true },
       });
 
-      // Create a map of hash to existing image for quick lookup
+      // Create a map of hash to existing image for quick lookup, prioritizing COMPLETED images
       const existingHashMap = new Map<string, typeof existingImages[0]>();
       for (const img of existingImages) {
-        if (!existingHashMap.has(img.contentHash)) {
+        const current = existingHashMap.get(img.contentHash);
+        if (!current || (current.status !== "COMPLETED" && img.status === "COMPLETED")) {
           existingHashMap.set(img.contentHash, img);
         }
       }
 
-      // Separate new files from duplicates
-      const newFiles: { file: Express.Multer.File; hash: string; index: number }[] = [];
-      const duplicateImages: { hash: string; existingImage: typeof existingImages[0]; index: number }[] = [];
+      // Track the first appearance index of each hash in this request
+      const firstAppearanceIndex = new Map<string, number>();
+      files.forEach((file, index) => {
+        const hash = contentHashes[index];
+        if (!firstAppearanceIndex.has(hash)) {
+          firstAppearanceIndex.set(hash, index);
+        }
+      });
+
+      // Separate new unique files from duplicates (database duplicates and intra-request duplicates)
+      const newUniqueFiles: { file: Express.Multer.File; hash: string; index: number }[] = [];
+      const seenHashesInRequest = new Set<string>();
 
       files.forEach((file, index) => {
         const hash = contentHashes[index];
         const existing = existingHashMap.get(hash);
-        if (existing) {
-          duplicateImages.push({ hash, existingImage: existing, index });
-        } else {
-          newFiles.push({ file, hash, index });
+        if (!existing && !seenHashesInRequest.has(hash)) {
+          newUniqueFiles.push({ file, hash, index });
+          seenHashesInRequest.add(hash);
         }
       });
 
+      // Map to keep track of stored path for each hash in this request
+      const hashToStoredPath = new Map<string, string>();
+      for (const [hash, img] of existingHashMap.entries()) {
+        hashToStoredPath.set(hash, img.storedPath);
+      }
+
       // Upload only new files to R2
-      const r2Keys = new Map<number, string>();
-      if (newFiles.length > 0) {
+      const r2Keys = new Map<string, string>();
+      if (newUniqueFiles.length > 0) {
         const uploadResults = await Promise.all(
-          newFiles.map(({ file }) => {
+          newUniqueFiles.map(({ file }) => {
             const ext = path.extname(file.originalname).toLowerCase();
             const key = `uploads/${crypto.randomUUID()}${ext}`;
             return uploadToR2(key, file.buffer, file.mimetype);
           })
         );
-        newFiles.forEach(({ index }, i) => {
-          r2Keys.set(index, uploadResults[i]);
+        newUniqueFiles.forEach(({ hash }, i) => {
+          r2Keys.set(hash, uploadResults[i]);
+          hashToStoredPath.set(hash, uploadResults[i]);
         });
       }
 
@@ -91,8 +107,9 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
           files.map((file, i) => {
             const hash = contentHashes[i];
             const existing = existingHashMap.get(hash);
+            const storedPath = hashToStoredPath.get(hash)!;
 
-            // If duplicate exists, reuse its storedPath
+            // If duplicate exists in database, reuse its storedPath and results
             if (existing) {
               return tx.image.create({
                 data: {
@@ -113,15 +130,32 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
               });
             }
 
-            // New image - use the uploaded R2 key
+            // Check if there is an earlier image in the same request with the same hash
+            const firstAppearanceIdx = firstAppearanceIndex.get(hash)!;
+            if (firstAppearanceIdx < i) {
+              return tx.image.create({
+                data: {
+                  jobId: created.id,
+                  originalName: sanitizedNames[i],
+                  storedPath,
+                  mimeType: file.mimetype,
+                  fileSize: file.size,
+                  contentHash: hash,
+                  status: "PENDING",
+                },
+              });
+            }
+
+            // New unique image in this request
             return tx.image.create({
               data: {
                 jobId: created.id,
                 originalName: sanitizedNames[i],
-                storedPath: r2Keys.get(i)!,
+                storedPath,
                 mimeType: file.mimetype,
                 fileSize: file.size,
                 contentHash: hash,
+                status: "PENDING",
               },
             });
           })
@@ -130,11 +164,20 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
         return { job: created, images: createdImages };
       });
 
-      // Enqueue only new images for processing (skip duplicates that are already completed)
+      // Enqueue only new images for processing (skip duplicates that are completed or active)
       const imagesToProcess = images.filter((img) => {
-        const hash = contentHashes[images.indexOf(img)];
+        const index = images.indexOf(img);
+        const hash = contentHashes[index];
         const existing = existingHashMap.get(hash);
-        return !existing || existing.status !== "COMPLETED";
+
+        // If there's an existing image, only process if the previous run FAILED
+        if (existing) {
+          return existing.status === "FAILED";
+        }
+
+        // If no existing image in DB, only enqueue the first occurrence in this request
+        const firstAppearanceIdx = firstAppearanceIndex.get(hash)!;
+        return firstAppearanceIdx === index;
       });
 
       if (imagesToProcess.length > 0) {
@@ -160,12 +203,16 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
           id: job.id,
           createdAt: job.createdAt,
           status: "pending",
-          images: images.map((img, i) => ({
-            id: img.id,
-            originalName: img.originalName,
-            status: img.status,
-            isDuplicate: existingHashMap.has(contentHashes[i]),
-          })),
+          images: images.map((img, i) => {
+            const hash = contentHashes[i];
+            const isDuplicate = existingHashMap.has(hash) || firstAppearanceIndex.get(hash)! < i;
+            return {
+              id: img.id,
+              originalName: img.originalName,
+              status: img.status,
+              isDuplicate,
+            };
+          }),
         },
       });
     } catch (error) {

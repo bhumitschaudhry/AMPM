@@ -101,7 +101,7 @@ describe('processImage', () => {
     expect(callOrder).toEqual(['checkContentSafety', 'detectLabels', 'generateCaption']);
   });
 
-  it('flags unsafe images, creates a notification, and skips BLIP captioning', async () => {
+  it('stops after SafeSearch for unsafe images: skips labels and caption, flags, and notifies', async () => {
     vi.mocked(checkContentSafety).mockResolvedValueOnce({
       isSafe: false,
       categories: { adult: 'VERY_LIKELY', violence: 'VERY_UNLIKELY' },
@@ -113,6 +113,15 @@ describe('processImage', () => {
     // PROCESSING + COMPLETED + flag update = 3 image updates
     expect(prisma.image.update).toHaveBeenCalledTimes(3);
     expect(prisma.image.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'COMPLETED',
+          caption: null,
+          labels: [],
+        }),
+      }),
+    );
+    expect(prisma.image.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ isFlagged: true, flaggedCategory: 'adult' }) }),
     );
     expect(prisma.notification.create).toHaveBeenCalledWith(
@@ -120,6 +129,8 @@ describe('processImage', () => {
         data: expect.objectContaining({ userId: 'user-1', title: 'Image Flagged' }),
       }),
     );
+    // Early exit: no further AI compute after SafeSearch flags the image
+    expect(detectLabels).not.toHaveBeenCalled();
     expect(generateCaption).not.toHaveBeenCalled();
   });
 
