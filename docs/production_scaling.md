@@ -8,6 +8,7 @@ This document outlines key strategies and architectural transitions for scaling 
 
 - **Horizontal Scaling**: Spin up additional replicas of the `worker` process. BullMQ coordinates atomic task lock distribution automatically, ensuring that no two workers process the same task.
 - **Concurrency Control**: Adjust the concurrency setting in the worker configuration (default: 3 concurrent jobs per process) to optimize resource usage based on cpu and memory availability.
+- **Queue Backlog Monitoring**: Utilize SigNoz telemetry with the `ampm.queue.depth` UpDownCounter metric (`QUEUE_DEPTH_METRICS_ENABLED=true`) to monitor waiting and active BullMQ task depth for automated horizontal worker scaling (KEDA / Fly.io autoscale triggers).
 
 ## Distributed Storage
 

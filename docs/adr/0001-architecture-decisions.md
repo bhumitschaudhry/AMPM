@@ -39,13 +39,19 @@ The AMPM codebase is split into [client](file:///E:/AMPM/client), [server](file:
 
 - **Implementation**: Uploaded image buffers are digested to SHA-256 (`content_hash`) and indexed in PostgreSQL (`images.content_hash`).
 - **Optimization**: If an existing completed image with identical hash is found for the user, AI metadata is copied directly and marked `COMPLETED` immediately, bypassing queueing and external AI API costs.
+- **Concurrency & Race Handling**: To handle concurrent duplicate uploads of the same image, existing completed images are re-checked inside the Prisma transaction scope. If an upload loses a race condition to a concurrent process, orphaned Cloudflare R2 files are cleaned up automatically.
 
 ### 7. Security Hardening & Input Defense
 
 - **Implementation**: API Gateway enforces Helmet security headers, recursive XSS sanitization, UUID route parameter validation, and 1MB request body parsing limits.
-- **Rate Limiting**: Protected endpoints enforce per-user rate limits (10 uploads / 15 min; 20 retries / 15 min) via `express-rate-limit`.
+- **Tiered Rate Limiting**: Protected and auth endpoints enforce IP and per-user rate limits (Signup: 3/60m, Login: 5/15m, Google Auth: 10/15m, Refresh: 10/15m, Upload: 10/15m, Retry: 20/15m, Global fallback: 200/15m) via `express-rate-limit`.
 
 ### 8. Safety-First AI Worker Pipeline Ordering
 
 - **Pipeline Flow**: Google Cloud Vision SafeSearch runs first. Only safe images continue to Label Detection and Hugging Face BLIP captioning.
 - **Quota Protection**: If SafeSearch flags an upload as unsafe (`LIKELY` or `VERY_LIKELY`), the pipeline stops immediately — label detection and caption generation are both skipped — to avoid spending AI quota on unsafe material and to avoid sending it to further third-party endpoints. The user is notified in-app.
+
+### 9. BullMQ Queue Depth Telemetry Polling
+
+- **Implementation**: `queue-metrics.ts` registers an OpenTelemetry `ampm.queue.depth` UpDownCounter instrument.
+- **Poller Lifecycle**: When `QUEUE_DEPTH_METRICS_ENABLED` is true, the server polls `imageQueue.getJobCounts()` at `QUEUE_DEPTH_POLL_INTERVAL_MS` intervals to track waiting, active, and delayed job backlogs in SigNoz. Polling is initialized on server startup and cleared cleanly on process termination.

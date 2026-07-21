@@ -17,45 +17,49 @@ This guide details how to configure the local environment and deploy the **AMPM*
 
 ## 1. Environment Configuration (`.env`)
 
-Configure your local `.env` file based on [.env.example](file:///E:/AMPM/.env.example). 
+Configure your local `.env` file based on [.env.example](file:///E:/AMPM/.env.example).
 
 ### Setup Commands
+
 - **Windows**: `Copy-Item .env.example .env`
 - **macOS/Linux**: `cp .env.example .env`
 
 ### Core Environment Variables
 
-| Variable | Scope | Description |
-|---|---|---|
-| `DATABASE_URL` | API & Worker | Database connection string. Use Neon's pooled connection for production (with `sslmode=require`). |
-| `DIRECT_DATABASE_URL` | API | Neon's unpooled direct connection string, required for running migrations. |
-| `REDIS_URL` | API & Worker | Connection URL. For production, use Upstash's secure TLS URL (`rediss://...`). |
-| `JWT_SECRET` | API | Random 32-byte hex string for signing Access Tokens. |
-| `JWT_REFRESH_SECRET` | API | Random 32-byte hex string for signing Refresh Tokens. |
-| `GOOGLE_CLOUD_VISION_API_KEY` | Worker | Google Vision API key with Vision API enabled. |
-| `HUGGINGFACE_API_TOKEN` | Worker | Hugging Face read access token. |
-| `GOOGLE_CLIENT_ID` | API | Google OAuth client ID (from Google Cloud Console). |
-| `GOOGLE_CLIENT_SECRET` | API | Google OAuth client secret (from Google Cloud Console). |
-| `VITE_GOOGLE_CLIENT_ID` | Client | Google OAuth client ID exposed to the browser. |
-| `R2_ACCOUNT_ID` | API & Worker | Cloudflare Account ID. |
-| `R2_ACCESS_KEY_ID` | API & Worker | Cloudflare R2 API token Access Key. |
-| `R2_SECRET_ACCESS_KEY` | API & Worker | Cloudflare R2 API token Secret Access Key. |
-| `R2_BUCKET_NAME` | API & Worker | Targeted Cloudflare R2 bucket name. |
-| `CLIENT_URL` | API | The origin URL of the Client (e.g. `https://<pages-project>.pages.dev`). |
-| `VITE_API_URL` | Client | The base URL of the API gateway (e.g. `https://ampm-api.fly.dev/api`). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | API & Worker | SigNoz / OpenTelemetry Collector OTLP endpoint (e.g., `http://otel-collector:4318`). |
-| `OTEL_SERVICE_NAME` | API & Worker | OpenTelemetry service name (`ampm-server` / `ampm-worker`). |
-
+| Variable                       | Scope        | Description                                                                                       |
+| ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                 | API & Worker | Database connection string. Use Neon's pooled connection for production (with `sslmode=require`). |
+| `DIRECT_DATABASE_URL`          | API          | Neon's unpooled direct connection string, required for running migrations.                        |
+| `REDIS_URL`                    | API & Worker | Connection URL. For production, use Upstash's secure TLS URL (`rediss://...`).                    |
+| `JWT_SECRET`                   | API          | Random 32-byte hex string for signing Access Tokens.                                              |
+| `JWT_REFRESH_SECRET`           | API          | Random 32-byte hex string for signing Refresh Tokens.                                             |
+| `GOOGLE_CLOUD_VISION_API_KEY`  | Worker       | Google Vision API key with Vision API enabled.                                                    |
+| `HUGGINGFACE_API_TOKEN`        | Worker       | Hugging Face read access token.                                                                   |
+| `GOOGLE_CLIENT_ID`             | API          | Google OAuth client ID (from Google Cloud Console).                                               |
+| `GOOGLE_CLIENT_SECRET`         | API          | Google OAuth client secret (from Google Cloud Console).                                           |
+| `VITE_GOOGLE_CLIENT_ID`        | Client       | Google OAuth client ID exposed to the browser.                                                    |
+| `R2_ACCOUNT_ID`                | API & Worker | Cloudflare Account ID.                                                                            |
+| `R2_ACCESS_KEY_ID`             | API & Worker | Cloudflare R2 API token Access Key.                                                               |
+| `R2_SECRET_ACCESS_KEY`         | API & Worker | Cloudflare R2 API token Secret Access Key.                                                        |
+| `R2_BUCKET_NAME`               | API & Worker | Targeted Cloudflare R2 bucket name.                                                               |
+| `CLIENT_URL`                   | API          | The origin URL of the Client (e.g. `https://<pages-project>.pages.dev`).                          |
+| `VITE_API_URL`                 | Client       | The base URL of the API gateway (e.g. `https://ampm-api.fly.dev/api`).                            |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`  | API & Worker | SigNoz / OpenTelemetry Collector OTLP endpoint (e.g., `http://otel-collector:4318`).              |
+| `OTEL_SERVICE_NAME`            | API & Worker | OpenTelemetry service name (`ampm-server` / `ampm-worker`).                                       |
+| `QUEUE_DEPTH_METRICS_ENABLED`  | API          | Set to `true` to enable BullMQ queue depth polling (`ampm.queue.depth`).                          |
+| `QUEUE_DEPTH_POLL_INTERVAL_MS` | API          | Queue depth polling interval in milliseconds (default: `10000`).                                  |
 
 ---
 
 ## 2. Infrastructure Setup
 
 ### 2.1 Database & Redis
+
 1. **Neon (PostgreSQL)**: Create a Neon project, copy the connection string, and note both the pooled (`DATABASE_URL`) and direct (`DIRECT_DATABASE_URL`) connection strings.
 2. **Upstash (Redis)**: Create a Serverless Redis instance, enable TLS, and copy the `rediss://` URL.
 
 ### 2.2 Cloudflare R2 Storage
+
 1. Create a bucket (e.g. `ampm-uploads-production`).
 2. Go to **R2 > Manage R2 API Tokens**, create a token with **Object Read & Write** permissions, and copy the Access Key ID and Secret Access Key.
 
@@ -66,12 +70,14 @@ Configure your local `.env` file based on [.env.example](file:///E:/AMPM/.env.ex
 Ensure the `flyctl` CLI is installed and you are logged in (`fly auth login`).
 
 ### Step 3.1: Create Applications
+
 ```powershell
 fly apps create ampm-api
 fly apps create ampm-worker
 ```
 
 ### Step 3.2: Configure Secrets
+
 Set the production secrets for both apps:
 
 ```powershell
@@ -105,11 +111,12 @@ fly secrets set --app ampm-worker `
 ```
 
 ### Step 3.3: Deploy Services
+
 1. **Deploy API Server**:
    ```powershell
    fly deploy --config fly.server.toml .
    ```
-   *(Note: The server build runs `prisma migrate deploy` automatically before startup).*
+   _(Note: The server build runs `prisma migrate deploy` automatically before startup)._
 2. **Deploy Worker**:
    ```powershell
    fly deploy --config fly.worker.toml .
