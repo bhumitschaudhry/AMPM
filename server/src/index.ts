@@ -19,6 +19,7 @@ import { notificationRouter } from "./routes/notification-routes";
 import { swaggerRouter } from "./routes/swagger-routes";
 import { errorHandler } from "./middleware/error-handler";
 import { sanitizeInput } from "./middleware/sanitize";
+import { globalRateLimiter } from "./middleware/rate-limiter";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -61,16 +62,20 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Health check — must come before global rate limiter so monitoring tools are never blocked.
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Global fallback rate limiter — broad per-IP safety net for all routes.
+// Route-specific limiters (upload, retry, login, etc.) fire first inside each router.
+app.use(globalRateLimiter);
+
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/jobs", jobRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api-docs", swaggerRouter);
-
-// Health check
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
 
 app.use(errorHandler);
 

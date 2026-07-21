@@ -281,6 +281,7 @@ jobRouter.get(
 jobRouter.post(
   "/:jobId/images/:imageId/retry",
   validateUuid("jobId", "imageId"),
+  retryRateLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const imageId = req.params.imageId as string;

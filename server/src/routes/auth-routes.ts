@@ -5,6 +5,12 @@ import { z } from "zod";
 import { OAuth2Client } from "google-auth-library";
 import prisma from "../db";
 import { authenticateToken } from "../middleware/auth-middleware";
+import {
+  loginRateLimiter,
+  signupRateLimiter,
+  googleAuthRateLimiter,
+  refreshRateLimiter,
+} from "../middleware/rate-limiter";
 import { createHttpError } from "../helpers/create-error";
 
 export const authRouter = Router();
@@ -36,7 +42,7 @@ function generateTokens(userId: string, email: string, tokenVersion: number) {
 }
 
 /** POST /signup — register a new user and return tokens. */
-authRouter.post("/signup", async (req: Request, res: Response, next: NextFunction) => {
+authRouter.post("/signup", signupRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = signupSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -61,7 +67,7 @@ authRouter.post("/signup", async (req: Request, res: Response, next: NextFunctio
 });
 
 /** POST /login — authenticate and return tokens. */
-authRouter.post("/login", async (req: Request, res: Response, next: NextFunction) => {
+authRouter.post("/login", loginRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -103,7 +109,7 @@ const googleClient = new OAuth2Client(
  * then find-or-create the user and return the same { accessToken, refreshToken, user } shape
  * as /login. No Prisma schema changes are needed — passwordHash is already nullable.
  */
-authRouter.post("/google", async (req: Request, res: Response, next: NextFunction) => {
+authRouter.post("/google", googleAuthRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { idToken } = req.body as { idToken?: unknown };
     if (typeof idToken !== "string" || !idToken) {
@@ -151,7 +157,7 @@ authRouter.post("/google", async (req: Request, res: Response, next: NextFunctio
  * The presented refresh token's embedded tokenVersion must match the user's current
  * version; otherwise it has been revoked (e.g. by logout) and is rejected.
  */
-authRouter.post("/refresh", async (req: Request, res: Response, next: NextFunction) => {
+authRouter.post("/refresh", refreshRateLimiter, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) {
