@@ -46,6 +46,7 @@ import { processImage } from '../process-image';
 import prisma from '../db';
 import { generateCaption } from '../pipeline/generate-caption';
 import { checkContentSafety } from '../pipeline/check-content-safety';
+import { detectLabels } from '../pipeline/detect-labels';
 
 function createMockJob(overrides: { attemptsMade?: number; data?: Partial<Job['data']> } = {}): Job<any> {
   return {
@@ -80,7 +81,27 @@ describe('processImage', () => {
     );
   });
 
-  it('flags unsafe images and creates a notification', async () => {
+  it('executes Google Vision safety check and label detection before Hugging Face BLIP captioning', async () => {
+    const callOrder: string[] = [];
+    vi.mocked(checkContentSafety).mockImplementationOnce(async () => {
+      callOrder.push('checkContentSafety');
+      return { isSafe: true, categories: {}, flaggedCategory: null };
+    });
+    vi.mocked(detectLabels).mockImplementationOnce(async () => {
+      callOrder.push('detectLabels');
+      return [{ name: 'Cat', score: 0.95 }];
+    });
+    vi.mocked(generateCaption).mockImplementationOnce(async () => {
+      callOrder.push('generateCaption');
+      return 'a photo of a cat';
+    });
+
+    await processImage(createMockJob());
+
+    expect(callOrder).toEqual(['checkContentSafety', 'detectLabels', 'generateCaption']);
+  });
+
+  it('flags unsafe images, creates a notification, and skips BLIP captioning', async () => {
     vi.mocked(checkContentSafety).mockResolvedValueOnce({
       isSafe: false,
       categories: { adult: 'VERY_LIKELY', violence: 'VERY_UNLIKELY' },
@@ -99,6 +120,7 @@ describe('processImage', () => {
         data: expect.objectContaining({ userId: 'user-1', title: 'Image Flagged' }),
       }),
     );
+    expect(generateCaption).not.toHaveBeenCalled();
   });
 
   it('marks image as FAILED and rethrows on pipeline error', async () => {

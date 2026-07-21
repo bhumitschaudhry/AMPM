@@ -44,9 +44,9 @@ export async function processImage(job: Job<ImageJobData>): Promise<void> {
     validateImageRecord(image);
 
     const imageBuffer = await readAndValidateImage(image.storedPath);
-    const caption = await generateCaption(imageBuffer);
-    const labels = await detectLabels(imageBuffer);
     const safetyResult = await checkContentSafety(imageBuffer);
+    const labels = await detectLabels(imageBuffer);
+    const caption = safetyResult.isSafe ? await generateCaption(imageBuffer) : null;
 
     await saveSuccessResult(imageId, caption, labels, safetyResult);
 
@@ -137,7 +137,7 @@ async function markImageStatus(imageId: string, status: 'PROCESSING' | 'COMPLETE
 /** Persist all AI pipeline results and mark image as completed. */
 async function saveSuccessResult(
   imageId: string,
-  caption: string,
+  caption: string | null,
   labels: Array<{ name: string; score: number }>,
   safetyResult: { isSafe: boolean; categories: Record<string, string>; flaggedCategory: string | null },
 ) {

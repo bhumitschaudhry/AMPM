@@ -162,9 +162,9 @@ flowchart TD
     Proc --> Sharp[Read & Validate Image via Sharp]
     
     subgraph AI Pipeline
-        Sharp --> Caption[1. Hugging Face Captioning]
-        Caption --> Label[2. Google Vision Labels]
-        Label --> Safe[3. Google Vision SafeSearch]
+        Sharp --> Safe[1. Google Vision SafeSearch]
+        Safe --> Label[2. Google Vision Labels]
+        Label --> Caption[3. Hugging Face Captioning (if safe)]
     end
 
     Safe --> SafetyCheck{SafeSearch Flagged?}
