@@ -8,14 +8,14 @@ This document describes the integration testing patterns, conventions, and infra
 
 AMPM uses **Vitest** as the sole test runner across all three packages (client, server, worker). Integration tests verify that multiple components work together correctly by testing complete workflows end-to-end while mocking only external infrastructure (databases, AI APIs, object storage).
 
-The codebase contains **17 test files** with four distinct integration test patterns:
+The codebase contains **20 test files** with four distinct integration test patterns:
 
-| Pattern | Package | What It Tests |
-|---------|---------|---------------|
-| Full HTTP Integration | server | Complete auth flows via live HTTP endpoints |
-| Pipeline Integration | worker | Image processing pipeline with mocked AI APIs |
-| Router Structure Verification | server | API surface contract stability |
-| React Component Integration | client | Page rendering, routing, and user flows |
+| Pattern                       | Package | What It Tests                                 |
+| ----------------------------- | ------- | --------------------------------------------- |
+| Full HTTP Integration         | server  | Complete auth flows via live HTTP endpoints   |
+| Pipeline Integration          | worker  | Image processing pipeline with mocked AI APIs |
+| Router Structure Verification | server  | API surface contract stability                |
+| React Component Integration   | client  | Page rendering, routing, and user flows       |
 
 ---
 
@@ -24,12 +24,14 @@ The codebase contains **17 test files** with four distinct integration test patt
 ### Vitest Configuration
 
 **Client** has an explicit Vitest config (`client/vitest.config.ts`):
+
 - Environment: `jsdom` (browser-like DOM)
 - Globals: `true` (no need to import `describe`, `it`, `expect`)
 - Setup file: `src/test/setup.ts` (imports `@testing-library/jest-dom`)
 - Includes: `src/**/*.test.{ts,tsx}`
 
 **Server and Worker** use Vitest defaults:
+
 - Auto-discovered `__tests__/` directories
 - Node environment
 - No explicit config file
@@ -63,30 +65,36 @@ Run these commands from within `client/`, `server/`, or `worker/` directories.
 This pattern spins up a real Express server and tests complete workflows via HTTP requests.
 
 **Key characteristics:**
+
 - Real HTTP server on random port: `app.listen(0)`
 - Native `fetch()` for HTTP requests
 - Only external infrastructure is mocked (Prisma database)
 - Tests complete user flows (signup → login → token rotation → logout)
 
 **Setup:**
+
+The server is created fresh inside `beforeEach` for test isolation, and torn down in `afterAll`:
+
 ```typescript
-let server: http.Server;
+let server: Server;
 let baseUrl: string;
 
-beforeAll(async () => {
+beforeEach(() => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api/auth', authRouter);
+  app.use(errorHandler);
   server = app.listen(0);
-  const address = server.address() as AddressInfo;
-  baseUrl = `http://localhost:${address.port}`;
+  baseUrl = `http://127.0.0.1:${(server.address() as any).port}/api/auth`;
 });
 
-afterAll(() => {
-  server.close();
-});
+afterAll(() => server?.close());
 ```
 
 **Mocking external dependencies:**
+
 ```typescript
-vi.mock("../db", () => ({
+vi.mock('../db', () => ({
   default: {
     user: {
       create: vi.fn(/* ... */),
@@ -98,10 +106,11 @@ vi.mock("../db", () => ({
 ```
 
 **Making HTTP requests:**
+
 ```typescript
 const response = await fetch(`${baseUrl}/api/auth/register`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ email, password }),
 });
 const data = await response.json();
@@ -118,45 +127,48 @@ expect(data.accessToken).toBeDefined();
 This pattern tests complete worker processing pipelines by mocking external services.
 
 **Key characteristics:**
-- Imports real processing functions
-- Mocks AI APIs (Axios), database (Prisma), object storage (R2), and image processing (Sharp)
-- Uses dynamic `await import()` after mocks are set up for proper hoisting
+
+- Imports real processing functions via static imports (after top-level `vi.mock()` calls)
+- Mocks individual pipeline modules (`generate-caption`, `detect-labels`, `check-content-safety`), database (Prisma), object storage (R2), and image processing (Sharp)
 - Tests status transitions, error handling, retry logic, and notification creation
 
-**Mocking external APIs:**
+**Mocking external dependencies:**
+
 ```typescript
-vi.mock("axios");
-vi.mock("../db");
-vi.mock("../storage/r2-client");
-vi.mock("sharp");
+vi.mock('../db', () => ({/* ... */}));
+vi.mock('../storage/r2-client', () => ({
+  downloadFromR2: vi.fn().mockResolvedValue(Buffer.from('fake-image')),
+}));
+vi.mock('sharp', () => ({
+  default: vi.fn(() => ({ toBuffer: vi.fn().mockResolvedValue(Buffer.from('processed')) })),
+}));
+vi.mock('../pipeline/generate-caption', () => ({
+  generateCaption: vi.fn().mockResolvedValue('a photo of a cat'),
+}));
+vi.mock('../pipeline/detect-labels', () => ({
+  detectLabels: vi.fn().mockResolvedValue([{ name: 'Cat', score: 0.95 }]),
+}));
+vi.mock('../pipeline/check-content-safety', () => ({
+  checkContentSafety: vi.fn().mockResolvedValue({ isSafe: true, flaggedCategory: null }),
+}));
 
-const mockedAxios = vi.mocked(axios, true);
-```
-
-**Dynamic import after mock setup:**
-```typescript
-let processImage: typeof import("../process-image").processImage;
-
-beforeEach(async () => {
-  // Reset all mocks
-  vi.clearAllMocks();
-  
-  // Dynamic import to ensure mocks are applied
-  const mod = await import("../process-image");
-  processImage = mod.processImage;
-});
+// Static import — safe because vi.mock() calls are hoisted above imports
+import { processImage } from '../process-image';
 ```
 
 **Testing error scenarios:**
+
 ```typescript
-it("should handle AI API rate limiting", async () => {
-  mockedAxios.post.mockRejectedValueOnce({
-    response: { status: 429, data: { error: "Rate limit exceeded" } },
+it('should mark job FAILED when content is unsafe', async () => {
+  vi.mocked(checkContentSafety).mockResolvedValueOnce({
+    isSafe: false,
+    flaggedCategory: 'adult',
   });
 
-  const result = await processImage(jobData);
-  expect(result.status).toBe("FAILED");
-  expect(result.error).toContain("rate limit");
+  await processImage(mockJob);
+  expect(vi.mocked(prisma.image.update)).toHaveBeenCalledWith(
+    expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
+  );
 });
 ```
 
@@ -169,15 +181,17 @@ it("should handle AI API rate limiting", async () => {
 This pattern verifies the API surface without testing business logic, acting as a contract test.
 
 **Key characteristics:**
+
 - Imports Express router with necessary mocks
 - Inspects `router.stack` to verify route paths and HTTP methods
 - Ensures API surface remains stable across changes
 
 **Verification approach:**
-```typescript
-import jobRouter from "../routes/job-routes";
 
-it("should register expected routes", () => {
+```typescript
+import jobRouter from '../routes/job-routes';
+
+it('should register expected routes', () => {
   const routes = jobRouter.stack
     .filter((layer: any) => layer.route)
     .map((layer: any) => ({
@@ -185,12 +199,8 @@ it("should register expected routes", () => {
       methods: Object.keys(layer.route.methods),
     }));
 
-  expect(routes).toContainEqual(
-    expect.objectContaining({ path: "/", methods: ["post"] })
-  );
-  expect(routes).toContainEqual(
-    expect.objectContaining({ path: "/", methods: ["get"] })
-  );
+  expect(routes).toContainEqual(expect.objectContaining({ path: '/', methods: ['post'] }));
+  expect(routes).toContainEqual(expect.objectContaining({ path: '/', methods: ['get'] }));
 });
 ```
 
@@ -198,17 +208,19 @@ it("should register expected routes", () => {
 
 ### Pattern D: React Component Integration
 
-**Example:** `client/src/App.test.tsx`, `client/src/pages/LoginPage.test.tsx`
+**Example:** `client/src/App.test.tsx`, `client/src/pages/LoginPage.test.tsx`, `client/src/pages/ClerkCallbackPage.test.tsx`
 
 This pattern tests rendered React components with provider wrappers.
 
 **Key characteristics:**
+
 - Uses `@testing-library/react` for rendering and assertions
 - Wraps components in necessary providers (`MemoryRouter`, `GoogleOAuthProvider`)
 - Mocks API calls and environment variables
 - Tests DOM output and routing behavior
 
 **Setup with providers:**
+
 ```typescript
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -225,8 +237,9 @@ const renderWithProviders = (ui: React.ReactElement, options?: RenderOptions) =>
 ```
 
 **Mocking API calls:**
+
 ```typescript
-vi.mock("../api", () => ({
+vi.mock('../api', () => ({
   default: {
     post: vi.fn(),
     get: vi.fn(),
@@ -235,6 +248,7 @@ vi.mock("../api", () => ({
 ```
 
 **Testing routing:**
+
 ```typescript
 it("should redirect to login when no token", () => {
   renderWithProviders(<App />, { initialEntries: ["/"] });
@@ -260,7 +274,7 @@ Vitest hoists `vi.mock()` calls to the top of the file. Mock factories must be s
 
 ```typescript
 // ✓ Correct - factory is self-contained
-vi.mock("../db", () => ({
+vi.mock('../db', () => ({
   default: {
     user: { create: vi.fn() },
   },
@@ -268,7 +282,7 @@ vi.mock("../db", () => ({
 
 // ✗ Incorrect - factory references external variable
 const mockDb = { user: { create: vi.fn() } };
-vi.mock("../db", () => mockDb);
+vi.mock('../db', () => mockDb);
 ```
 
 ### Mocking Type Safety
@@ -276,11 +290,11 @@ vi.mock("../db", () => mockDb);
 Use `vi.mocked()` for type-safe mock access:
 
 ```typescript
-import axios from "axios";
-vi.mock("axios");
+import axios from 'axios';
+vi.mock('axios');
 
 const mockedAxios = vi.mocked(axios, true);
-mockedAxios.post.mockResolvedValue({ data: { result: "success" } });
+mockedAxios.post.mockResolvedValue({ data: { result: 'success' } });
 ```
 
 ### Reset State Between Tests
@@ -326,13 +340,13 @@ beforeEach(() => {
 ### Complete Auth Flow Test (Server)
 
 ```typescript
-describe("Auth Flow Integration", () => {
-  it("should complete full signup and token rotation cycle", async () => {
+describe('Auth Flow Integration', () => {
+  it('should complete full signup and token rotation cycle', async () => {
     // 1. Register new user
     const registerResponse = await fetch(`${baseUrl}/api/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "test@example.com", password: "Password123" }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'test@example.com', password: 'Password123' }),
     });
     expect(registerResponse.status).toBe(201);
     const { accessToken, refreshToken } = await registerResponse.json();
@@ -345,8 +359,8 @@ describe("Auth Flow Integration", () => {
 
     // 3. Refresh tokens
     const refreshResponse = await fetch(`${baseUrl}/api/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
     expect(refreshResponse.status).toBe(200);
@@ -354,8 +368,8 @@ describe("Auth Flow Integration", () => {
 
     // 4. Old refresh token should be invalidated
     const oldRefreshResponse = await fetch(`${baseUrl}/api/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken }),
     });
     expect(oldRefreshResponse.status).toBe(401);
@@ -366,34 +380,34 @@ describe("Auth Flow Integration", () => {
 ### Image Processing Pipeline Test (Worker)
 
 ```typescript
-describe("processImage Integration", () => {
-  it("should process valid image through full pipeline", async () => {
+describe('processImage Integration', () => {
+  it('should process valid image through full pipeline', async () => {
     // Mock successful AI responses
     mockedAxios.post
-      .mockResolvedValueOnce({ data: [{ generated_text: "A sunset over mountains" }] })
-      .mockResolvedValueOnce({ data: { labelAnnotations: [{ description: "nature" }] } })
-      .mockResolvedValueOnce({ data: { safeSearchDetection: { adult: "very_unlikely" } } });
+      .mockResolvedValueOnce({ data: [{ generated_text: 'A sunset over mountains' }] })
+      .mockResolvedValueOnce({ data: { labelAnnotations: [{ description: 'nature' }] } })
+      .mockResolvedValueOnce({ data: { safeSearchDetection: { adult: 'very_unlikely' } } });
 
     const result = await processImage({
-      jobId: "job-123",
-      imageUrl: "https://storage.example.com/image.jpg",
-      userId: "user-456",
+      jobId: 'job-123',
+      imageUrl: 'https://storage.example.com/image.jpg',
+      userId: 'user-456',
     });
 
-    expect(result.status).toBe("COMPLETED");
-    expect(result.caption).toBe("A sunset over mountains");
-    expect(result.labels).toContain("nature");
+    expect(result.status).toBe('COMPLETED');
+    expect(result.caption).toBe('A sunset over mountains');
+    expect(result.labels).toContain('nature');
     expect(result.isSafe).toBe(true);
   });
 
-  it("should flag unsafe content and create notification", async () => {
+  it('should flag unsafe content and create notification', async () => {
     mockedAxios.post.mockResolvedValueOnce({
-      data: { safeSearchDetection: { adult: "very_likely" } },
+      data: { safeSearchDetection: { adult: 'very_likely' } },
     });
 
     const result = await processImage(unsafeJobData);
 
-    expect(result.status).toBe("COMPLETED");
+    expect(result.status).toBe('COMPLETED');
     expect(result.isSafe).toBe(false);
     expect(mockPrisma.notification.create).toHaveBeenCalled();
   });
@@ -407,6 +421,7 @@ describe("processImage Integration", () => {
 ### Mock Not Being Applied
 
 If mocks aren't working, ensure:
+
 - `vi.mock()` is at the top level (not inside functions)
 - Using dynamic `import()` after mock setup for worker tests
 - Mock factory is self-contained (no external references)
