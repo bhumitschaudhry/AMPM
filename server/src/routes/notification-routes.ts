@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import prisma from "../db";
 import { authenticateToken } from "../middleware/auth-middleware";
+import { validateUuid } from "../middleware/validate-uuid";
 import { createHttpError } from "../helpers/create-error";
 
 export const notificationRouter = Router();
@@ -23,7 +24,7 @@ notificationRouter.get("/", async (req: Request, res: Response, next: NextFuncti
 });
 
 /** PATCH /:notificationId/read — mark a single notification as read. */
-notificationRouter.patch("/:notificationId/read", async (req: Request, res: Response, next: NextFunction) => {
+notificationRouter.patch("/:notificationId/read", validateUuid("notificationId"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const notificationId = req.params.notificationId as string;
     const notification = await prisma.notification.findFirst({

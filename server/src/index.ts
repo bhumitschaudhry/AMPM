@@ -12,11 +12,13 @@ for (const key of ["JWT_SECRET", "JWT_REFRESH_SECRET"] as const) {
 
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import { authRouter } from "./routes/auth-routes";
 import { jobRouter } from "./routes/job-routes";
 import { notificationRouter } from "./routes/notification-routes";
 import { swaggerRouter } from "./routes/swagger-routes";
 import { errorHandler } from "./middleware/error-handler";
+import { sanitizeInput } from "./middleware/sanitize";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -32,7 +34,25 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://unpkg.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Parse JSON with explicit size limit
+app.use(express.json({ limit: "1mb" }));
+
+// Sanitize all incoming data against XSS
+app.use(sanitizeInput);
 
 // Allow the Google OAuth popup to post messages back to this page.
 // The default COOP same-origin policy blocks cross-origin window.postMessage.

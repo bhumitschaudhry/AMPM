@@ -8,8 +8,10 @@ import { deriveJobStatus } from "../constants";
 import { authenticateToken } from "../middleware/auth-middleware";
 import { upload } from "../middleware/upload-middleware";
 import { uploadRateLimiter, retryRateLimiter } from "../middleware/rate-limiter";
+import { validateUuid } from "../middleware/validate-uuid";
 import { createHttpError } from "../helpers/create-error";
 import { uploadToR2, downloadFromR2 } from "../storage/r2-client";
+import { sanitizeFilename } from "../helpers/sanitize-filename";
 
 export const jobRouter = Router();
 jobRouter.use(authenticateToken);
@@ -31,6 +33,9 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
       const contentHashes = files.map((file) =>
         crypto.createHash("sha256").update(file.buffer).digest("hex")
       );
+
+      // Sanitize filenames to prevent XSS and path traversal
+      const sanitizedNames = files.map((file) => sanitizeFilename(file.originalname));
 
       // Check for existing images with the same hash for this user
       const existingImages = await prisma.image.findMany({
@@ -92,7 +97,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
               return tx.image.create({
                 data: {
                   jobId: created.id,
-                  originalName: file.originalname,
+                  originalName: sanitizedNames[i],
                   storedPath: existing.storedPath,
                   mimeType: file.mimetype,
                   fileSize: file.size,
@@ -112,7 +117,7 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
             return tx.image.create({
               data: {
                 jobId: created.id,
-                originalName: file.originalname,
+                originalName: sanitizedNames[i],
                 storedPath: r2Keys.get(i)!,
                 mimeType: file.mimetype,
                 fileSize: file.size,
@@ -204,6 +209,7 @@ jobRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
 /** GET /:jobId/images/:imageId/file — stream an owned image from R2. */
 jobRouter.get(
   "/:jobId/images/:imageId/file",
+  validateUuid("jobId", "imageId"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const image = await prisma.image.findFirst({
@@ -230,6 +236,7 @@ jobRouter.get(
 /** GET /:jobId — full job detail with all image fields. */
 jobRouter.get(
   "/:jobId",
+  validateUuid("jobId"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const jobId = req.params.jobId as string;
@@ -273,6 +280,7 @@ jobRouter.get(
 /** POST /:jobId/images/:imageId/retry — re-enqueue a failed image. */
 jobRouter.post(
   "/:jobId/images/:imageId/retry",
+  validateUuid("jobId", "imageId"),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const imageId = req.params.imageId as string;
@@ -309,6 +317,7 @@ jobRouter.post(
 /** POST /:jobId/retry — re-enqueue all failed images in a job. */
 jobRouter.post(
   "/:jobId/retry",
+  validateUuid("jobId"),
   retryRateLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
