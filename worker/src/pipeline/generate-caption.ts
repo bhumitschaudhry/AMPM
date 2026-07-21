@@ -1,7 +1,7 @@
 import axios from 'axios';
 import dns from 'dns';
 import { httpsAgentWithDnsFallback } from './https-agent-with-dns-fallback';
-import { recordAiTokenAnalysis } from '../telemetry';
+import { recordBlipTokenAnalysis } from '../telemetry';
 
 // HuggingFace inference hosts, tried in order. The canonical api-inference
 // subdomain has been observed returning ENOTFOUND during DNS outages, so the
@@ -56,7 +56,6 @@ async function warmDnsResolution(host: string): Promise<void> {
 export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   let lastError: unknown;
   const startTime = Date.now();
-  const promptTokens = Math.max(1, Math.ceil(imageBuffer.length / 1024));
 
   // Try each HuggingFace host in turn so a DNS/network outage on one endpoint
   // (e.g. api-inference.huggingface.co ENOTFOUND) falls through to the next.
@@ -92,13 +91,9 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
       }
 
       const caption = firstResult.generated_text;
-      const completionTokens = caption.trim().split(/\s+/).filter(Boolean).length;
-      recordAiTokenAnalysis({
-        provider: 'huggingface',
-        model: 'Salesforce/blip-image-captioning-base',
-        task: 'captioning',
-        promptTokens,
-        completionTokens,
+      recordBlipTokenAnalysis({
+        imageBuffer,
+        caption,
         durationMs: Date.now() - startTime,
         isSuccess: true,
       });
@@ -114,12 +109,9 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
 
       if (isUnsupported) {
         console.warn('[WARN] HuggingFace model Salesforce/blip-image-captioning-base is decommissioned or unsupported. Returning fallback caption.');
-        recordAiTokenAnalysis({
-          provider: 'huggingface',
-          model: 'Salesforce/blip-image-captioning-base',
-          task: 'captioning',
-          promptTokens,
-          completionTokens: 3,
+        recordBlipTokenAnalysis({
+          imageBuffer,
+          caption: 'An uploaded image',
           durationMs: Date.now() - startTime,
           isSuccess: true,
         });
@@ -131,12 +123,8 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
       // don't waste a fallback attempt, surface them immediately.
       const isNetworkError = Boolean(code) && ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(code);
       if (!isNetworkError) {
-        recordAiTokenAnalysis({
-          provider: 'huggingface',
-          model: 'Salesforce/blip-image-captioning-base',
-          task: 'captioning',
-          promptTokens,
-          completionTokens: 0,
+        recordBlipTokenAnalysis({
+          imageBuffer,
           durationMs: Date.now() - startTime,
           isSuccess: false,
         });
@@ -148,12 +136,8 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   }
 
   // All hosts failed — forward a clear network error for the retry/categorize path.
-  recordAiTokenAnalysis({
-    provider: 'huggingface',
-    model: 'Salesforce/blip-image-captioning-base',
-    task: 'captioning',
-    promptTokens,
-    completionTokens: 0,
+  recordBlipTokenAnalysis({
+    imageBuffer,
     durationMs: Date.now() - startTime,
     isSuccess: false,
   });
@@ -167,4 +151,5 @@ export async function generateCaption(imageBuffer: Buffer): Promise<string> {
   }
   throw finalError;
 }
+
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { initTelemetry, recordAiTokenAnalysis } from "../telemetry";
+import { initTelemetry, recordAiTokenAnalysis, recordBlipTokenAnalysis } from "../telemetry";
 
 describe("worker telemetry", () => {
   it("returns null when OTEL_SDK_DISABLED is true", () => {
@@ -28,6 +28,24 @@ describe("worker telemetry", () => {
         promptTokens: 80,
         completionTokens: 5,
         durationMs: 220,
+        isSuccess: false,
+      });
+    }).not.toThrow();
+  });
+
+  it("records BLIP model specific token analysis payload without throwing", () => {
+    const fakeImageBuffer = Buffer.from("test image buffer data content for blip model test");
+    expect(() => {
+      recordBlipTokenAnalysis({
+        imageBuffer: fakeImageBuffer,
+        caption: "a photo of a cat resting on a soft blanket",
+        durationMs: 850,
+        isSuccess: true,
+      });
+
+      recordBlipTokenAnalysis({
+        imageBuffer: fakeImageBuffer,
+        durationMs: 1200,
         isSuccess: false,
       });
     }).not.toThrow();
