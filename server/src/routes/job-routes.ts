@@ -27,49 +27,127 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
         throw createHttpError(400, "At least one image file is required.");
       }
 
-      // Upload each file buffer to R2 and collect their object keys.
-      const r2Keys = await Promise.all(
-        files.map((file) => {
-          // Unique key: uploads/<uuid>.<ext>
-          const ext = path.extname(file.originalname).toLowerCase();
-          const key = `uploads/${crypto.randomUUID()}${ext}`;
-          return uploadToR2(key, file.buffer, file.mimetype);
-        })
+      // Generate content hashes for duplicate detection
+      const contentHashes = files.map((file) =>
+        crypto.createHash("sha256").update(file.buffer).digest("hex")
       );
 
-      // Create the Job + Image rows atomically. storedPath now holds the R2 object key.
+      // Check for existing images with the same hash for this user
+      const existingImages = await prisma.image.findMany({
+        where: {
+          contentHash: { in: contentHashes },
+          job: { userId: req.userId },
+        },
+        include: { job: true },
+      });
+
+      // Create a map of hash to existing image for quick lookup
+      const existingHashMap = new Map<string, typeof existingImages[0]>();
+      for (const img of existingImages) {
+        if (!existingHashMap.has(img.contentHash)) {
+          existingHashMap.set(img.contentHash, img);
+        }
+      }
+
+      // Separate new files from duplicates
+      const newFiles: { file: Express.Multer.File; hash: string; index: number }[] = [];
+      const duplicateImages: { hash: string; existingImage: typeof existingImages[0]; index: number }[] = [];
+
+      files.forEach((file, index) => {
+        const hash = contentHashes[index];
+        const existing = existingHashMap.get(hash);
+        if (existing) {
+          duplicateImages.push({ hash, existingImage: existing, index });
+        } else {
+          newFiles.push({ file, hash, index });
+        }
+      });
+
+      // Upload only new files to R2
+      const r2Keys = new Map<number, string>();
+      if (newFiles.length > 0) {
+        const uploadResults = await Promise.all(
+          newFiles.map(({ file }) => {
+            const ext = path.extname(file.originalname).toLowerCase();
+            const key = `uploads/${crypto.randomUUID()}${ext}`;
+            return uploadToR2(key, file.buffer, file.mimetype);
+          })
+        );
+        newFiles.forEach(({ index }, i) => {
+          r2Keys.set(index, uploadResults[i]);
+        });
+      }
+
+      // Create the Job + Image rows atomically
       const { job, images } = await prisma.$transaction(async (tx) => {
         const created = await tx.job.create({ data: { userId: req.userId! } });
+
         const createdImages = await Promise.all(
-          files.map((file, i) =>
-            tx.image.create({
+          files.map((file, i) => {
+            const hash = contentHashes[i];
+            const existing = existingHashMap.get(hash);
+
+            // If duplicate exists, reuse its storedPath
+            if (existing) {
+              return tx.image.create({
+                data: {
+                  jobId: created.id,
+                  originalName: file.originalname,
+                  storedPath: existing.storedPath,
+                  mimeType: file.mimetype,
+                  fileSize: file.size,
+                  contentHash: hash,
+                  // Copy AI results from existing image if available
+                  caption: existing.caption,
+                  labels: existing.labels as any,
+                  safetyResult: existing.safetyResult as any,
+                  isFlagged: existing.isFlagged,
+                  flaggedCategory: existing.flaggedCategory,
+                  status: existing.status === "COMPLETED" ? "COMPLETED" : existing.status,
+                },
+              });
+            }
+
+            // New image - use the uploaded R2 key
+            return tx.image.create({
               data: {
                 jobId: created.id,
                 originalName: file.originalname,
-                storedPath: r2Keys[i],
+                storedPath: r2Keys.get(i)!,
                 mimeType: file.mimetype,
                 fileSize: file.size,
+                contentHash: hash,
               },
-            })
-          )
+            });
+          })
         );
+
         return { job: created, images: createdImages };
       });
 
-      try {
-        await Promise.all(
-          images.map((img) =>
-            imageQueue.add("process-image", {
-              imageId: img.id,
-              jobId: img.jobId,
-              storedPath: img.storedPath,
-            })
-          )
-        );
-      } catch (enqueueError) {
-        // Roll back the DB writes so no orphaned PENDING images are left behind.
-        await prisma.job.delete({ where: { id: job.id } }).catch(() => undefined);
-        throw enqueueError;
+      // Enqueue only new images for processing (skip duplicates that are already completed)
+      const imagesToProcess = images.filter((img) => {
+        const hash = contentHashes[images.indexOf(img)];
+        const existing = existingHashMap.get(hash);
+        return !existing || existing.status !== "COMPLETED";
+      });
+
+      if (imagesToProcess.length > 0) {
+        try {
+          await Promise.all(
+            imagesToProcess.map((img) =>
+              imageQueue.add("process-image", {
+                imageId: img.id,
+                jobId: img.jobId,
+                storedPath: img.storedPath,
+              })
+            )
+          );
+        } catch (enqueueError) {
+          // Roll back the DB writes so no orphaned PENDING images are left behind.
+          await prisma.job.delete({ where: { id: job.id } }).catch(() => undefined);
+          throw enqueueError;
+        }
       }
 
       res.status(201).json({
@@ -77,10 +155,11 @@ jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextF
           id: job.id,
           createdAt: job.createdAt,
           status: "pending",
-          images: images.map((img) => ({
+          images: images.map((img, i) => ({
             id: img.id,
             originalName: img.originalName,
             status: img.status,
+            isDuplicate: existingHashMap.has(contentHashes[i]),
           })),
         },
       });

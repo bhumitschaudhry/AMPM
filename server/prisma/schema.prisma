@@ -58,6 +58,7 @@ model Image {
   job             Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId])
+  @@index([contentHash])
   @@map("images")
 }
 
