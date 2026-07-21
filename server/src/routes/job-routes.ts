@@ -7,6 +7,7 @@ import { imageQueue } from "../queue";
 import { deriveJobStatus } from "../constants";
 import { authenticateToken } from "../middleware/auth-middleware";
 import { upload } from "../middleware/upload-middleware";
+import { uploadRateLimiter, retryRateLimiter } from "../middleware/rate-limiter";
 import { createHttpError } from "../helpers/create-error";
 import { uploadToR2, downloadFromR2 } from "../storage/r2-client";
 
@@ -14,7 +15,7 @@ export const jobRouter = Router();
 jobRouter.use(authenticateToken);
 
 /** POST / — create a job and enqueue uploaded images for processing. */
-jobRouter.post("/", (req: Request, res: Response, next: NextFunction) => {
+jobRouter.post("/", uploadRateLimiter, (req: Request, res: Response, next: NextFunction) => {
   upload.array("images", 10)(req, res, async (multerError) => {
     try {
       if (multerError) {
@@ -229,6 +230,7 @@ jobRouter.post(
 /** POST /:jobId/retry — re-enqueue all failed images in a job. */
 jobRouter.post(
   "/:jobId/retry",
+  retryRateLimiter,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const jobId = req.params.jobId as string;
